@@ -198,6 +198,7 @@ services:
       # external/managed Postgres operators MUST override CERTCTL_DATABASE_URL
       # with sslmode=verify-full and provide the CA bundle. See docs/database-tls.md.
       CERTCTL_DATABASE_URL: ${CERTCTL_DATABASE_URL:-postgres://certctl:${POSTGRES_PASSWORD}@postgres:5432/certctl?sslmode=disable}
+      CERTCTL_TEST_SEED: "true"
       CERTCTL_SERVER_HOST: 0.0.0.0
       CERTCTL_SERVER_PORT: 8443
       CERTCTL_SERVER_TLS_CERT_PATH: /etc/certctl/tls/server.crt
