@@ -14,7 +14,7 @@ Every `v*` tag publishes:
 - Cosign signatures (keyless OIDC, signing identity = the release workflow on a signed tag)
 - SLSA Level 3 provenance
 
-Container images on `ghcr.io/certctl-io/certctl-{server,agent}` are built with `docker/build-push-action` `provenance: mode=max` + `sbom: true` and additionally signed with Cosign at the image digest.
+Container images on `ghcr.io/zulufun/certctl-localhost-{server,agent}` are built with `docker/build-push-action` `provenance: mode=max` + `sbom: true` and additionally signed with Cosign at the image digest.
 
 ## Verification procedure
 
@@ -29,7 +29,7 @@ sha256sum -c checksums.txt
 ```bash
 cosign verify-blob \
   --bundle checksums.txt.sigstore.json \
-  --certificate-identity-regexp '^https://github\.com/certctl-io/certctl/\.github/workflows/release\.yml@refs/tags/' \
+  --certificate-identity-regexp '^https://github\.com/zulufun/certctl-localhost/\.github/workflows/release\.yml@refs/tags/' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
   checksums.txt
 ```
@@ -51,22 +51,22 @@ Replace `v2.1.0` with the tag you're verifying.
 ### 4. Verify a container image signature and its SBOM / provenance attestations
 
 ```bash
-IMAGE=ghcr.io/certctl-io/certctl-server:v2.1.0
+IMAGE=ghcr.io/zulufun/certctl-localhost-server:v2.1.0
 
 cosign verify \
-  --certificate-identity-regexp '^https://github\.com/certctl-io/certctl/\.github/workflows/release\.yml@refs/tags/' \
+  --certificate-identity-regexp '^https://github\.com/zulufun/certctl-localhost/\.github/workflows/release\.yml@refs/tags/' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
   "$IMAGE"
 
 # SBOM attestation (SPDX-JSON, emitted by docker/build-push-action)
 cosign verify-attestation --type spdxjson \
-  --certificate-identity-regexp '^https://github\.com/certctl-io/certctl/' \
+  --certificate-identity-regexp '^https://github\.com/zulufun/certctl-localhost/' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
   "$IMAGE"
 
 # SLSA provenance attestation (docker/build-push-action `provenance: mode=max`)
 cosign verify-attestation --type slsaprovenance \
-  --certificate-identity-regexp '^https://github\.com/certctl-io/certctl/' \
+  --certificate-identity-regexp '^https://github\.com/zulufun/certctl-localhost/' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
   "$IMAGE"
 ```

@@ -6,8 +6,8 @@
 
 [![License](https://img.shields.io/badge/license-BSL%201.1-blue.svg)](LICENSE)
 [![Go Report Card](https://goreportcard.com/badge/github.com/zulufun/certctl-localhost)](https://goreportcard.com/report/github.com/zulufun/certctl-localhost)
-[![GitHub Release](https://img.shields.io/github/v/release/certctl-io/certctl)](https://github.com/zulufun/certctl-localhost/releases)
-[![GitHub Stars](https://img.shields.io/github/stars/certctl-io/certctl?style=flat&logo=github)](https://github.com/zulufun/certctl-localhost/stargazers)
+[![GitHub Release](https://img.shields.io/github/v/release/zulufun/certctl-localhost)](https://github.com/zulufun/certctl-localhost/releases)
+[![GitHub Stars](https://img.shields.io/github/stars/zulufun/certctl-localhost?style=flat&logo=github)](https://github.com/zulufun/certctl-localhost/stargazers)
 
 certctl is a self-hosted platform that automates the entire TLS certificate lifecycle, from issuance through renewal to deployment, with zero human intervention. Twelve native CA connectors plus an OpenSSL / shell-script adapter for custom CAs; fourteen production-ready native deployment-target connectors plus Kubernetes Secrets (preview) and a proxy-agent pattern for network appliances and agentless targets. In agent-mode (the default), private keys stay on the host they were generated on and never touch the control plane; a demo-only `CERTCTL_KEYGEN_MODE=server` flag mints keys server-side, refuses to start without an explicit `CERTCTL_DEMO_MODE_ACK=true` acknowledgement. Free, source-available under BSL 1.1, covers the same lifecycle that enterprise platforms charge $100K+/year for.
 
@@ -122,7 +122,7 @@ The control plane is HTTPS-only with TLS 1.3 pinned. See [`docs/operator/tls.md`
 ### Agent install (one-liner)
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/certctl-io/certctl/master/install-agent.sh | bash
+curl -sSL https://raw.githubusercontent.com/zulufun/certctl-localhost/master/install-agent.sh | bash
 ```
 
 Detects your OS and architecture, downloads the binary, configures systemd (Linux) or launchd (macOS), and starts the agent. See [install-agent.sh](install-agent.sh).
@@ -143,8 +143,8 @@ Production-ready chart with Server Deployment, PostgreSQL StatefulSet (or extern
 ### Container images
 
 ```bash
-docker pull ghcr.io/certctl-io/certctl-server:latest
-docker pull ghcr.io/certctl-io/certctl-agent:latest
+docker pull ghcr.io/zulufun/certctl-localhost-server:latest
+docker pull ghcr.io/zulufun/certctl-localhost-agent:latest
 ```
 
 ## Examples

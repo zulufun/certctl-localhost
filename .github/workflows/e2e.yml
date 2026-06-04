@@ -4,7 +4,7 @@
 # TEST-003 closure (Sprint 5, 2026-05-16): the suite has accumulated
 # the empirical green-run evidence the Phase 8 prompt required. 14
 # consecutive green runs across 2026-05-14 to 2026-05-15 (sampled
-# via api.github.com/repos/certctl-io/certctl/actions/runs) during
+# via api.github.com/repos/zulufun/certctl-localhost/actions/runs) during
 # heavy Sprint 1-4 frontend churn confirm stability. The job is
 # now part of the merge gate (continue-on-error: false below).
 #

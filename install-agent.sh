@@ -12,7 +12,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # Configuration
-GITHUB_REPO="certctl-io/certctl"
+GITHUB_REPO="zulufun/certctl-localhost"
 RELEASE_URL="https://github.com/${GITHUB_REPO}/releases/latest/download"
 INSTALL_DIR="/usr/local/bin"
 SERVICE_NAME="certctl-agent"
@@ -316,7 +316,7 @@ download_binary() {
     #
     # The release publishes <binary>.sigstore.json next to each binary,
     # signed via sigstore/cosign-installer keyless mode against the
-    # GitHub Actions OIDC identity for the certctl-io/certctl repo
+    # GitHub Actions OIDC identity for the zulufun/certctl-localhost repo
     # (see .github/workflows/release.yml). Cosign verify with the
     # certificate-identity-regexp + certificate-oidc-issuer pair
     # pins the signature to the repo's release workflow — a malicious
@@ -344,7 +344,7 @@ download_binary() {
     else
         echo -e "${YELLOW}WARNING:${NC} cosign is not installed — SKIPPING signature verification." >&2
         echo "  SHA-256 verification above is still in force, but the cosign signature" >&2
-        echo "  ties the binary to the certctl-io/certctl release workflow's OIDC" >&2
+        echo "  ties the binary to the zulufun/certctl-localhost release workflow's OIDC" >&2
         echo "  identity — the load-bearing supply-chain check. Operators in regulated" >&2
         echo "  environments MUST install cosign and re-run:" >&2
         echo "    curl -sSL https://github.com/sigstore/cosign/releases/latest/download/cosign-${OS_TYPE}-${ARCH_TYPE} -o /usr/local/bin/cosign" >&2

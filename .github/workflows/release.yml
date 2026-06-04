@@ -394,7 +394,7 @@ jobs:
             ```bash
             cosign verify-blob \
               --bundle checksums.txt.sigstore.json \
-              --certificate-identity-regexp '^https://github\.com/certctl-io/certctl/\.github/workflows/release\.yml@refs/tags/' \
+              --certificate-identity-regexp '^https://github\.com/zulufun/certctl-localhost/\.github/workflows/release\.yml@refs/tags/' \
               --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
               checksums.txt
             ```
@@ -416,21 +416,21 @@ jobs:
             **4. Verify container image signature and attestations:**
 
             ```bash
-            IMAGE=ghcr.io/certctl-io/certctl-server:${{ steps.version.outputs.VERSION }}
+            IMAGE=ghcr.io/zulufun/certctl-localhost-server:${{ steps.version.outputs.VERSION }}
             cosign verify \
-              --certificate-identity-regexp '^https://github\.com/certctl-io/certctl/\.github/workflows/release\.yml@refs/tags/' \
+              --certificate-identity-regexp '^https://github\.com/zulufun/certctl-localhost/\.github/workflows/release\.yml@refs/tags/' \
               --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
               "$IMAGE"
 
             # SBOM attestation (SPDX-JSON) emitted by docker/build-push-action
             cosign verify-attestation --type spdxjson \
-              --certificate-identity-regexp '^https://github\.com/certctl-io/certctl/' \
+              --certificate-identity-regexp '^https://github\.com/zulufun/certctl-localhost/' \
               --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
               "$IMAGE"
 
             # SLSA provenance attestation (mode=max)
             cosign verify-attestation --type slsaprovenance \
-              --certificate-identity-regexp '^https://github\.com/certctl-io/certctl/' \
+              --certificate-identity-regexp '^https://github\.com/zulufun/certctl-localhost/' \
               --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
               "$IMAGE"
             ```

@@ -43,7 +43,7 @@ Access the dashboard at `https://localhost:8443` with the API key from `.env`. T
 On each server running acme.sh certs, install the certctl agent:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/certctl-io/certctl/master/install-agent.sh | bash
+curl -sSL https://raw.githubusercontent.com/zulufun/certctl-localhost/master/install-agent.sh | bash
 # Prompted for server URL and API key
 ```
 

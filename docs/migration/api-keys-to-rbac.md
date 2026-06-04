@@ -200,7 +200,7 @@ spec:
     spec:
       containers:
  - name: scope-down
-        image: ghcr.io/certctl-io/certctl-cli:<tag>
+        image: ghcr.io/zulufun/certctl-localhost-cli:<tag>
         command:
  - certctl-cli
  - auth

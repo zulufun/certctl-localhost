@@ -76,7 +76,7 @@ bundle is the canonical archive and is available on request.
 ## Container images and release tarballs
 
 ghcr.io container images that were published before the rewrite
-(`ghcr.io/certctl-io/certctl-{server,agent}:<old-tag>`) remain pullable
+(`ghcr.io/zulufun/certctl-localhost-{server,agent}:<old-tag>`) remain pullable
 indefinitely. Their OCI source-SHA labels reference commit SHAs that
 no longer resolve in the public origin — the images themselves still
 work; only the source-SHA back-reference is now orphan. New release

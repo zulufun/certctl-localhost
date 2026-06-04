@@ -53,7 +53,7 @@ fi
 latest_tag=$(git tag --sort=-v:refname 2>/dev/null | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)
 if [ -z "$latest_tag" ]; then
   echo "openapi-version-tag-parity: no local v* tag found; falling back to api.github.com/.../tags"
-  latest_tag=$(curl -sS https://api.github.com/repos/certctl-io/certctl/tags 2>/dev/null \
+  latest_tag=$(curl -sS https://api.github.com/repos/zulufun/certctl-localhost/tags 2>/dev/null \
     | grep -oE '"name": *"v[0-9]+\.[0-9]+\.[0-9]+"' \
     | head -1 \
     | sed -E 's/.*"v/v/; s/".*//')

@@ -12,7 +12,7 @@ server:
   replicas: 3
 
   image:
-    repository: ghcr.io/certctl-io/certctl
+    repository: ghcr.io/zulufun/certctl-localhost
     tag: "2.1.0"
     pullPolicy: IfNotPresent
 
@@ -100,7 +100,7 @@ agent:
   kind: DaemonSet
 
   image:
-    repository: ghcr.io/certctl-io/certctl-agent
+    repository: ghcr.io/zulufun/certctl-localhost-agent
     tag: "2.1.0"
     pullPolicy: IfNotPresent
 
