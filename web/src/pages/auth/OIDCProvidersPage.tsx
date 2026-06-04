@@ -244,8 +244,7 @@ function CreateProviderModal({ isOpen, onClose, onSuccess }: CreateProviderModal
           {/* Audit 2026-05-11 A-3 — Allowed email domains chip control.
               When the list is non-empty, only users whose email-domain
               matches one of these entries can complete OIDC login. For
-              multi-tenant IdPs (Auth0, Azure AD common endpoint, Google
-              Workspace) this is the only thing preventing cross-tenant
+              multi-tenant IdPs this is the only thing preventing cross-tenant
               logins; the CRIT-5 backend gate is load-bearing but the GUI
               never exposed it until this fix. */}
           <div>

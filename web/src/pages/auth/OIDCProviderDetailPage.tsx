@@ -174,7 +174,7 @@ export default function OIDCProviderDetailPage() {
     if (!window.confirm(
       'Clear ALL allowed email domains?\n\n' +
       'After saving, ANY user with a valid OIDC token from this provider can log in. ' +
-      'For multi-tenant IdPs (Auth0, Azure AD common, Google Workspace) this means cross-tenant ' +
+      'For multi-tenant IdPs this means cross-tenant ' +
       'logins are no longer blocked. Confirm only if that is intended.',
     )) return;
     setEditAllowedEmailDomains([]);
@@ -524,7 +524,7 @@ export default function OIDCProviderDetailPage() {
                   />
                   <p className="text-xs text-ink-muted mt-1">
                     Default <code>openid profile email</code>. Some IdPs need <code>groups</code> for
-                    the group-claim path; Auth0 namespaces groups under a custom claim. Must include{' '}
+                    the group-claim path. Must include{' '}
                     <code>openid</code>.
                   </p>
                 </div>
@@ -544,7 +544,7 @@ export default function OIDCProviderDetailPage() {
                     <p className="text-xs text-ink-muted mt-1">
                       JSON path within the ID token (or userinfo if fallback enabled) that holds the
                       group list. Common: <code>groups</code>, <code>realm_access.roles</code>
-                      {' '}(Keycloak), namespaced URLs (Auth0).
+                      array (e.g. <code>["admin", "user"]</code>).
                     </p>
                   </div>
                   <div>

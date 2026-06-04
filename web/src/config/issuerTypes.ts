@@ -54,10 +54,10 @@ export const issuerTypes: IssuerTypeConfig[] = [
   {
     id: 'ACME',
     name: 'ACME',
-    description: "Let's Encrypt, ZeroSSL, or any ACME-compatible CA",
+    description: "ACME-compatible CA (e.g. Step-CA, Pebble)",
     icon: '\uD83D\uDD12',
     configFields: [
-      { key: 'directory_url', label: 'Directory URL', placeholder: 'https://acme-v02.api.letsencrypt.org/directory', required: true },
+      { key: 'directory_url', label: 'Directory URL', placeholder: 'https://acme.internal/directory', required: true },
       { key: 'email', label: 'Email', placeholder: 'admin@example.com', required: true },
       { key: 'challenge_type', label: 'Challenge Type', type: 'select', options: ['http-01', 'dns-01', 'dns-persist-01'], required: false, defaultValue: 'http-01' },
       { key: 'profile', label: 'Certificate Profile', type: 'select', options: ['', 'tlsserver', 'shortlived'], required: false, defaultValue: '' },

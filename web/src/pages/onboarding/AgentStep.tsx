@@ -47,7 +47,7 @@ export default function AgentStep({ onNext, onSkip }: { onNext: () => void; onSk
     linux: {
       label: 'Install via shell script (systemd service)',
       code: `# Non-interactive install (recommended for curl | bash):
-curl -sSL https://raw.githubusercontent.com/certctl-io/certctl/master/install-agent.sh \\
+curl -sSL https://raw.githubusercontent.com/zulufun/certctl-localhost/master/install-agent.sh \\
   | sudo bash -s -- \\
       --server-url ${serverUrl} \\
       --api-key ${apiKey}
@@ -59,7 +59,7 @@ curl -sSL https://raw.githubusercontent.com/certctl-io/certctl/master/install-ag
     macos: {
       label: 'Install via shell script (launchd service)',
       code: `# Non-interactive install (recommended for curl | bash):
-curl -sSL https://raw.githubusercontent.com/certctl-io/certctl/master/install-agent.sh \\
+curl -sSL https://raw.githubusercontent.com/zulufun/certctl-localhost/master/install-agent.sh \\
   | bash -s -- \\
       --server-url ${serverUrl} \\
       --api-key ${apiKey}
@@ -73,7 +73,7 @@ curl -sSL https://raw.githubusercontent.com/certctl-io/certctl/master/install-ag
       code: `docker run -d --name certctl-agent \\
   -e CERTCTL_SERVER_URL=${serverUrl} \\
   -e CERTCTL_API_KEY=${apiKey} \\
-  ghcr.io/certctl-io/certctl-agent:latest`,
+  ghcr.io/zulufun/certctl-localhost-agent:latest`,
     },
   };
 
