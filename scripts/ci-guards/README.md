@@ -1,0 +1,139 @@
+# `scripts/ci-guards/` — Regression-guard scripts
+
+Each `<id>.sh` script in this directory pins one closed audit finding from
+regressing. CI runs the full set on every push via the
+`Regression guards` step in `.github/workflows/ci.yml`. Operators can
+run any script locally:
+
+```bash
+bash scripts/ci-guards/G-3-env-docs-drift.sh
+```
+
+## Contract
+
+Every script in this directory MUST:
+
+1. Be exit-code 0 on a clean repo (no regression present).
+2. Be exit-code non-zero on regression, with a `::error::` annotation
+   prefix so PR reviewers see the failing line in the GitHub Actions UI.
+3. **Be runnable from repo root via `bash scripts/ci-guards/<id>.sh`
+   with NO arguments and NO env-var requirements.** The CI loop step
+   (`for g in scripts/ci-guards/*.sh; do bash "$g"; done`) iterates
+   every `.sh` here without args; any script that requires an arg or
+   env var WILL fail in that loop.
+4. Carry a head-comment block matching the in-source justification
+   from the original ci.yml entry: the audit-finding reference, the
+   closure rationale, the exempt-surface list (if any).
+5. Use `set -e` early to fail-fast on internal command errors.
+6. Produce no output on the happy path beyond a final
+   `echo "<id>: clean."` confirmation line.
+
+### Helpers vs guards
+
+Scripts that consume input artifacts (a test-output log, a
+`coverage.out` file) or env vars (`PR_NUMBER`, `GH_TOKEN`) are
+HELPERS, not guards. They live in `scripts/`, NOT `scripts/ci-guards/`.
+
+Current helpers:
+- `scripts/vendor-e2e-skip-check.sh` — consumes `test-output.log`
+  arg from the deploy-vendor-e2e job
+- `scripts/coverage-pr-comment.sh` — consumes `coverage.out` +
+  `PR_NUMBER` + `GH_TOKEN` env from the go-build-and-test job
+- `scripts/check-coverage-thresholds.sh` — consumes `coverage.out`
+  + `.github/coverage-thresholds.yml`
+
+## Adding a new guard
+
+1. Drop a new `<id>.sh` in this directory with the head-comment block
+   describing the audit finding it closes.
+2. Make it executable: `chmod +x scripts/ci-guards/<id>.sh`.
+3. Verify it fails on a deliberate regression and passes on clean repo.
+4. CI auto-picks up new scripts via the `for g in scripts/ci-guards/*.sh`
+   loop in the `Regression guards` step — no ci.yml change required.
+
+## Guards in this directory
+
+Count: re-derive on demand via `ls scripts/ci-guards/*.sh | wc -l`. The table below names each one — keep it in sync as guards are added.
+
+### Per-finding regression guards
+
+| ID | Finding | Catches |
+|---|---|---|
+| `G-1-jwt-auth-literal` | G-1 JWT silent auth downgrade | `"jwt"` literal in additive auth-type surfaces |
+| `L-001-insecure-skip-verify` | L-001 unjustified InsecureSkipVerify | `InsecureSkipVerify: true` without `//nolint:gosec` |
+| `H-001-bare-from` | H-001 (CWE-829) tag-swap attack | Bare `FROM` line without `@sha256` digest pin |
+| `M-012-no-root-user` | M-012 (CWE-250) container-as-root | Dockerfile missing terminal `USER <non-root>` |
+| `H-009-readme-jwt` | H-009 README JWT advertising | README.md re-introducing JWT-as-supported claim |
+| `G-2-api-key-hash-json` | G-2 cat-s5-apikey_leak | `api_key_hash` in JSON-emitting surface |
+| `U-2-plaintext-healthcheck` | U-2 healthcheck protocol mismatch | Plaintext `http://` in HEALTHCHECK directive |
+| `U-3-migration-mount` | U-3 seed initdb schema drift | Migration file mounted into postgres initdb |
+| `D-1-D-2-statusbadge-phantom` | D-1 + D-2 dead keys + TS phantoms | StatusBadge dead keys + 5 Certificate / 5 Agent / 1 Issuer / 1 Notification phantom fields |
+| `L-1-bulk-action-loop` | L-1 client-side bulk loops | `for ... await triggerRenewal/updateCertificate` in CertificatesPage |
+| `B-1-orphan-crud` | B-1 orphan-CRUD client fns | 8 update/create/delete fns lose their page consumer |
+| `S-2-strings-contains-err` | S-2 brittle error-dispatch | `strings.Contains(err.Error(), "not found"\|"violates foreign key")` in handlers |
+| `G-3-env-docs-drift` | G-3 env-var docs drift | `CERTCTL_*` env var defined OR documented but not both |
+| `test-naming-convention` | I-001-extended | `func TestXxx` (lowercase first letter) — Go silently skips |
+| `S-1-hardcoded-source-counts` | S-1 stale numeric prose | Hardcoded "N issuer connectors" / "N MCP tools" in README + docs |
+| `P-1-documented-orphan-fns` | P-1 documented orphans | 16 read-fn names removed from client.ts exports |
+| `T-1-frontend-page-coverage` | T-1 untested frontend pages | New page in `web/src/pages/` without sibling `.test.tsx` and not on the deferred allowlist |
+| `bundle-8-L-015-target-blank-rel-noopener` | L-015 (CWE-1022) reverse-tabnabbing | `target="_blank"` without `rel="noopener noreferrer"` |
+| `bundle-8-L-019-dangerously-set-inner-html` | L-019 (CWE-79) XSS | `dangerouslySetInnerHTML` outside `safeHtml.ts` |
+| `bundle-8-M-009-bare-usemutation` | M-009 + M-029 mutation contract | Bare `useMutation()` outside `useTrackedMutation` wrapper |
+| `H-1-encryption-key-min-length` | H-1 closure follow-up (post-Phase-5 surfacing) | `CERTCTL_CONFIG_ENCRYPTION_KEY` literal in any `deploy/docker-compose*.yml` shorter than the 32-byte floor enforced by `internal/config/config.go::Validate()` |
+| `test-compose-scep-coherence` | post-Phase-5 surfacing of dead SCEP test config | `CERTCTL_SCEP_ENABLED=true` in test compose without (a) a CI job that runs the SCEP integration test, (b) the `ra.crt` + `ra.key` + `intune_trust_anchor.pem` fixtures committed to `deploy/test/fixtures/`, AND (c) the matching volume mount |
+| `openapi-handler-parity` | ARCH-H1 OpenAPI ↔ handler drift | Router routes vs OpenAPI operations vs documented exceptions (wire-protocol vs rest-deferred buckets). Supports `--bucket=wire-protocol\|rest-deferred` subcommand for sibling guards. |
+| `openapi-rest-deferred-monotonic` | ARCH-H1 Phase 13 Sprint 13.1 — rest-deferred bucket monotonic-decrease | `category: rest-deferred` count growing vs the checked-in baseline at `api/openapi-handler-exceptions-baseline.txt`. Sprints 13.4-13.6 drive this to zero; Sprint 13.7 tightens to a zero-exact pin. |
+
+### Forward-looking guards (Auditable Codebase Bundle, post-v2.1.0 anti-rot)
+
+These guards catch defect classes BEFORE they get audit findings — they pin invariants on the codebase that the v2.0 audit history showed are easy to lose.
+
+| ID | Item | Catches |
+|---|---|---|
+| `complete-path-config-coverage` | post-v2.1.0 / item-1 | "Lying field" — `CERTCTL_*` env var defined in `internal/config/config.go` that no consumer outside `internal/config/` actually reads. Operator-facing config that the docs claim works but the code never honors. Companion Go test at `internal/config/coverage_test.go`. |
+| `doc-rot-detector` | post-v2.1.0 / item-5 | Docs older than 90 days warn (yellow), older than 120 days fail (red). Uses HEAD commit timestamp for reproducibility. `docs/archive/` allowlisted in bulk. |
+
+The cold-DB compose smoke (post-v2.1.0 / item-6) is NOT a script in this directory — it is inlined directly into `.github/workflows/ci.yml::cold-db-compose-smoke` because there is no value in a developer running it locally (the whole point of the gate is that CI owns the cold-DB state). To inspect or modify the smoke logic, read that workflow job; there is intentionally no `scripts/ci-guards/cold-db-compose-smoke.sh`.
+
+The fourth Bundle artifact (`internal/ciparity/`) is Go tests, not shell guards — runs under the standard Go test step. Pins the MCP tool catalogue floor + naming convention; reports CLI/MCP/OpenAPI surface counts as a trend metric.
+
+
+## Running the full set locally
+
+```bash
+for g in scripts/ci-guards/*.sh; do
+  echo "=== $(basename "$g") ==="
+  bash "$g" || echo "  FAILED"
+done
+```
+
+## ARCH-H1 OpenAPI exception two-bucket contract (Phase 13 Sprint 13.1)
+
+`api/openapi-handler-exceptions.yaml` lists every router route that is intentionally NOT in `api/openapi.yaml`. Each entry carries a required `category:` field with one of two values:
+
+- **`category: wire-protocol`** — the route's wire shape is dictated by an IETF RFC (SCEP RFC 8894, ACME RFC 8555, ACME ARI RFC 9773, EST RFC 7030) or it's a sibling/shorthand variant of one. The canonical reference for these endpoints lives in `docs/acme-server.md` + `docs/operator/scep.md` + `docs/operator/est.md` — duplicating their wire contract in `openapi.yaml` would add no information. **Wire-protocol entries never burn down.**
+
+- **`category: rest-deferred`** — the route is REST-shaped (resource CRUD, JSON request/response, RBAC-gated) but its OpenAPI operation was deferred when the handler shipped. **Rest-deferred entries must monotonically decrease to zero.** Authoring an OpenAPI op for a deferred route + deleting the corresponding exception entry + decrementing `api/openapi-handler-exceptions-baseline.txt` in the same PR is the canonical close path.
+
+### Adding a new exception entry
+
+The default category for new entries is `rest-deferred`. Only set `wire-protocol` when:
+
+1. The `why:` field cites a specific RFC anchor (e.g. "RFC 8555 §7.1.1 directory"), AND
+2. The route's wire shape is dictated by the RFC (not a REST resource that happens to live alongside one).
+
+When in doubt, default to `rest-deferred` and author the OpenAPI op. The two guards in this directory enforce both buckets:
+
+- `openapi-handler-parity.sh` reports bucket counts + fails on missing/unknown `category:` fields + fails on stale exceptions / undocumented router routes.
+- `openapi-rest-deferred-monotonic.sh` fails if `rest-deferred` grows vs the baseline file at `api/openapi-handler-exceptions-baseline.txt`.
+
+### Inspecting bucket counts
+
+```bash
+# Full report.
+bash scripts/ci-guards/openapi-handler-parity.sh
+
+# Just one bucket count (used by sibling guards).
+bash scripts/ci-guards/openapi-handler-parity.sh --bucket=wire-protocol
+bash scripts/ci-guards/openapi-handler-parity.sh --bucket=rest-deferred
+```

@@ -1,0 +1,778 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+      - v2-dev
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  go-build-and-test:
+    name: Go Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+        with:
+          go-version: '1.25.10'
+          # Phase 3 TEST-L1 closure (2026-05-13): enable Go's module +
+          # build cache so re-runs hit the cache instead of recompiling
+          # the world. setup-go v5 cache: true by default; making it
+          # explicit so a future setup-go upgrade can't silently flip it.
+          cache: true
+
+      - name: Go Build
+        run: |
+          go build ./cmd/server/...
+          go build ./cmd/agent/...
+          go build ./cmd/mcp-server/...
+          go build ./cmd/cli/...
+
+      - name: gofmt drift (Makefile::verify parity)
+        # ci-pipeline-cleanup Phase 4 / frozen decision 0.13: Makefile::verify
+        # checks gofmt + vet + golangci-lint + go test. CI runs vet, lint, test
+        # already — but NOT gofmt. This step closes the parity gap.
+        # Mirrors the Makefile::verify shape: any gofmt output means the
+        # source needs reformatting.
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "::error::gofmt would reformat these files (run 'gofmt -w' locally):"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: go mod tidy drift
+        # ci-pipeline-cleanup Phase 4: catches PRs that import a package
+        # without committing the go.mod / go.sum update. Standard Go-CI
+        # gate; absent before this bundle.
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: Go Vet
+        run: go vet ./...
+
+      - name: Install golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v2.11.4
+
+      - name: Run golangci-lint
+        run: golangci-lint run ./... --timeout 5m
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck (M-024 hard gate)
+        # Bundle-7 / D-001 partial: govulncheck distinguishes called-vs-uncalled
+        # advisories. Default exit code is non-zero only when YOUR code calls
+        # the vulnerable function — deferred-call advisories show up in the
+        # output but don't fail the gate.
+        #
+        # Bundle F / Audit M-024 (NIST SSDF PW.7.2): the govulncheck step
+        # is now a hard CI gate (no `continue-on-error`). Bundle E's
+        # transitive bumps (x/net 0.42→0.47, x/crypto 0.41→0.45) cleared
+        # the 5 deferred-call advisories that were previously on the
+        # exception list, so the carve-out the original Bundle F prompt
+        # designed is unnecessary — a clean `govulncheck ./...` is the
+        # right gate. If a future advisory lands in a function our code
+        # does call, this step fails the build until either upstream
+        # ships a fix OR we cut the dep. Deferred-call advisories that
+        # legitimately can't be remediated yet should be added to the
+        # NIST SSDF deviation log in docs/operator/security.md, not silenced here.
+        run: govulncheck ./...
+
+      - name: Install staticcheck (Bundle-7 / D-001)
+        run: go install honnef.co/go/tools/cmd/staticcheck@latest
+
+      - name: Run staticcheck
+        # Bundle-7 / D-001: Go static analysis additive to vet. Suppressed
+        # rules live in staticcheck.conf with documented justifications;
+        # adding a new entry requires an explicit security review.
+        #
+        # ci-pipeline-cleanup Phase 3 / frozen decision 0.7: HARD gate.
+        # M-028 SA1019 sites verified closed at HEAD 1de61e91:
+        #   - middleware.NewAuth: zero callers (all migrated to
+        #     NewAuthWithNamedKeys in cmd/server/{main,main_test}.go)
+        #   - csr.Attributes (internal/api/handler/scep.go × 2): inline
+        #     //lint:ignore SA1019 with load-bearing rationale (RFC 2985
+        #     challengePassword has no non-deprecated stdlib API)
+        #   - elliptic.Marshal: only in bundle9_coverage_test.go × 1 as
+        #     deliberate byte-equivalence regression oracle, suppressed
+        #     with //lint:ignore SA1019
+        run: staticcheck ./...
+
+      - name: Race Detection
+        # Phase 3 TEST-H1 closure (2026-05-13): the pre-Phase-3 invocation
+        # listed 9 explicit package roots, excluding internal/auth/*,
+        # internal/repository/*, internal/mcp, internal/scep, internal/pkcs7,
+        # internal/api/router, internal/api/acme, internal/cli, internal/cms,
+        # internal/config, internal/deploy, internal/integration,
+        # internal/ratelimit, internal/secret, internal/trustanchor, plus
+        # all of cmd/. Audit finding TEST-H1 flagged this as silent
+        # race-detection drift — packages added after the original list
+        # was authored were never covered.
+        #
+        # Post-Phase-3: ./... with -short. The 76 testing.Short() guards
+        # already in the integration-test surface (testcontainers, live-DB,
+        # multi-process) gate behind this flag, so race detection runs
+        # across every package without dragging in long-running suites.
+        # Timeout doubled from 300s to 600s because ./... is broader; the
+        # broader scope is what makes race coverage trustworthy.
+        run: go test -race -short ./... -count=1 -timeout 600s
+
+      - name: Go Test with Coverage
+        # internal/ciparity/... — post-v2.1.0 anti-rot item 2 surface-
+        # parity tests; stdlib-only so they always pass in this job.
+        run: |
+          go test ./internal/service/... ./internal/api/handler/... ./internal/api/middleware/... ./internal/api/router/... ./internal/auth/... ./internal/integration/... ./internal/connector/issuer/... ./internal/connector/target/... ./internal/connector/notifier/... ./internal/connector/discovery/... ./internal/crypto/... ./internal/mcp/... ./internal/cli/... ./internal/domain/... ./internal/validation/... ./internal/tlsprobe/... ./internal/ciparity/... -count=1 -cover -coverprofile=coverage.out
+
+      - name: Multi-replica rate-limit integration test (Phase 13 Sprint 13.2/13.3 — ARCH-M1 closure proof)
+        # The falsifiable proof that CERTCTL_RATE_LIMIT_BACKEND=postgres
+        # enforces caps cluster-wide. testcontainers-go spins one
+        # Postgres container; 3 *PostgresSlidingWindowLimiter instances
+        # share it; 100 concurrent Allow("test-key") with cap=10 must
+        # see exactly 10 succeed + 90 ErrRateLimited. Failure here =
+        # the row-lock arbitration broke; ARCH-M1 closure is invalid.
+        run: |
+          go test -tags=integration -race -count=1 -timeout=300s \
+              -run TestRateLimit_PostgresBackend_CapEnforcedAcrossReplicas \
+              ./internal/integration/...
+
+      - name: Check Coverage Thresholds
+        # ci-pipeline-cleanup Phase 2: per-package floors moved to
+        # .github/coverage-thresholds.yml. Each entry has `floor:` +
+        # `why:` (load-bearing context). Logic in
+        # scripts/check-coverage-thresholds.sh — operator runs the same
+        # script locally via `make verify`-equivalent loop.
+        run: bash scripts/check-coverage-thresholds.sh
+
+      - name: Upload Coverage Report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: go-coverage
+          path: coverage.out
+          retention-days: 30
+
+      - name: Coverage PR comment
+        # ci-pipeline-cleanup Phase 10 / frozen decision 0.9: self-hosted
+        # alternative to Codecov / Coveralls. Posts a per-package coverage
+        # delta as a PR comment; updates in place on subsequent pushes.
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash scripts/coverage-pr-comment.sh
+
+      # Bundle Q / I-001 closure — test-naming convention guard (informational).
+      # The convention is `Test<Func>_<Scenario>_<ExpectedResult>`. This step
+      # prints any non-conformant tests but does NOT fail the build until the
+      # Bundle I-001-extended (2026-04-27) — promoted from informational
+      # to hard-fail. The convention is now: every `func TestXxx(...)` MUST
+      # match Go's standard test-runner pattern (`^func Test[A-Z]`). Tests
+      # whose name starts with `func Test<lowercase>` are silently SKIPPED
+      # by `go test` (Go only runs `Test[A-Z]...`) — those are the real
+      # bugs this guard catches.
+      #
+      # The original audit's `Test<Func>_<Scenario>_<ExpectedResult>` triple-
+      # token prescription has been relaxed: single-function pin tests like
+      # `TestNewAgent` or `TestSplitPEMChain` are valid Go convention, with
+      # internal scenarios expressed via `t.Run` subtests. Requiring the
+      # underscore-Scenario-Result triple repo-wide would mean renaming
+      # 167 legitimate tests for no observable behavior change. The
+      # Test<Func>_<Scenario>_<ExpectedResult> form remains the
+      # recommended pattern for parameterized scenarios, but is not gated.
+      # Phase 4 DEPL-* prerequisite (2026-05-14): helm-templates-lint.sh
+      # needs the `helm` CLI on PATH to run helm lint + helm template
+      # against the chart. The official azure/setup-helm action installs
+      # a SHA-pinned helm binary into the runner.
+      - name: Install Helm (for helm-templates-lint guard)
+        uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112  # v4.3.0
+        with:
+          version: v3.16.0
+
+      - name: Regression guards (extracted to scripts/ci-guards/)
+        # All named regression guards live at scripts/ci-guards/<id>.sh per
+        # ci-pipeline-cleanup bundle Phase 1. Each guard is callable locally:
+        #   bash scripts/ci-guards/G-3-env-docs-drift.sh
+        # Adding a new guard: drop a new <id>.sh; this loop auto-picks it up.
+        # Contract: each guard MUST exit 0 on clean repo, non-zero with
+        # ::error:: prefix on regression. See scripts/ci-guards/README.md.
+        #
+        run: |
+          set -e
+          fail=0
+          for g in scripts/ci-guards/*.sh; do
+            echo "::group::$(basename "$g")"
+            if ! bash "$g"; then
+              fail=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $fail
+
+  cross-platform-build:
+    # Phase 3 TEST-H2 closure (2026-05-13): the pre-Phase-3 CI ran
+    # exclusively on ubuntu-latest, leaving Windows-specific bugs
+    # (path separators, file permissions, exec.Command semantics)
+    # undetected. The agent + CLI binaries ship for Windows + macOS
+    # users; this matrix asserts they at least BUILD on every OS we
+    # claim to support.
+    #
+    # Build-only — no test run. Full test parity across OSes is a
+    # larger investment (testcontainers is Linux-only on Windows CI
+    # runners, file-permission tests differ, etc.). The build gate
+    # is the minimum that catches the cross-platform regressions
+    # we've seen in practice.
+    name: Cross-platform build (ubuntu / windows / macos)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+        with:
+          go-version: '1.25.10'
+          cache: true
+
+      - name: Build server + agent + CLI + mcp-server
+        run: |
+          go build ./cmd/server
+          go build ./cmd/agent
+          go build ./cmd/cli
+          go build ./cmd/mcp-server
+
+  cold-db-compose-smoke:
+    # Per post-v2.1.0 anti-rot item 6 (Auditable Codebase Bundle).
+    #
+    # Catches migration-on-cold-DB regressions: wipe the postgres
+    # volume, bring the stack up cold, mint a day-0 admin, issue +
+    # renew + revoke a test certificate, assert audit rows, tear down.
+    # Targets the bug class that the warm-DB integration suite misses
+    # (canonical case: 2026-05-09 migration 000045 broken INSERT,
+    # fixed in commit 6444e13).
+    name: Cold-DB compose smoke
+    runs-on: ubuntu-latest
+    needs: go-build-and-test
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Show Docker versions
+        run: |
+          docker --version
+          docker compose version
+
+      - name: Cold-DB compose smoke
+        # The smoke deliberately focuses on the bug class that ONLY a
+        # cold boot can catch: stack-startup correctness against a
+        # blank database. It is intentionally NOT a functional API
+        # walkthrough — the integration test suite under
+        # 'Go Test with Coverage' already covers issue / renew /
+        # revoke / audit-row plumbing against a warm DB.
+        #
+        # The bugs this gate is uniquely positioned to catch:
+        #   - Missing required env vars that fail Config.Validate()
+        #     at startup (e.g. CERTCTL_DEMO_MODE_ACK gap, 2026-05-12).
+        #   - Non-idempotent migrations that crash on the second boot
+        #     (e.g. migration 000043 CHECK constraint, 2026-05-12).
+        #   - Documented manual flows that don't work end-to-end on
+        #     a clean compose (e.g. CERTCTL_BOOTSTRAP_TOKEN
+        #     interpolation gap, 2026-05-12).
+        #
+        # Bugs OUTSIDE the scope of this smoke (covered elsewhere):
+        #   - API request/response contract changes (integration suite).
+        #   - Cert lifecycle correctness (integration suite + handler
+        #     tests).
+        #   - Audit row plumbing (handler tests).
+        #
+        # 10-min wall-clock cap covers cold image pull + compose-up +
+        # force-recreate + admin bootstrap + teardown. Increase only
+        # if the underlying steps legitimately grow.
+        #
+        # The smoke is inlined here on purpose — it is NOT a script in
+        # scripts/ci-guards/, because there is no value in a developer
+        # running this locally. The whole point of the gate is that CI
+        # owns the cold-DB state; the operator never has to remember to
+        # run it.
+        timeout-minutes: 10
+        working-directory: deploy
+        env:
+          STARTUP_TIMEOUT_SECONDS: 300
+        run: |
+          set -e
+          set -o pipefail
+
+          SERVER_URL="https://localhost:8443"
+          CACERT_PATH="${GITHUB_WORKSPACE}/deploy/test/certs/ca.crt"
+
+          log() { echo "[cold-db-smoke] $*"; }
+
+          wait_for_service_healthy() {
+            local svc="$1" deadline=$(( $(date +%s) + STARTUP_TIMEOUT_SECONDS ))
+            while [ "$(date +%s)" -lt "$deadline" ]; do
+              local state
+              state="$(docker compose ps --format json "$svc" 2>/dev/null | python3 -c '
+          import json, sys
+          try:
+              line = sys.stdin.read().strip()
+              if not line:
+                  print("not-up"); sys.exit(0)
+              rows = json.loads(line) if line.startswith("[") else [json.loads(l) for l in line.splitlines() if l.strip()]
+              if not rows:
+                  print("not-up")
+              else:
+                  print(rows[0].get("Health", rows[0].get("State", "?")))
+          except Exception as e:
+              print(f"err: {e}")
+          ')"
+              if [ "$state" = "healthy" ] || [ "$state" = "running" ]; then
+                log "  $svc → $state"; return 0
+              fi
+              sleep 2
+            done
+            log "  $svc did NOT reach healthy within ${STARTUP_TIMEOUT_SECONDS}s (last: $state)"
+            return 1
+          }
+
+          http_call() {
+            local method="$1" path="$2" data="${3:-}"
+            local args=(--silent --show-error --max-time 30 -X "$method" "$SERVER_URL$path")
+            [ -f "$CACERT_PATH" ] && args+=(--cacert "$CACERT_PATH") || args+=(--insecure)
+            [ -n "$data" ] && args+=(-H "Content-Type: application/json" -d "$data")
+            curl "${args[@]}"
+          }
+
+          # Bundle 2 closure (2026-05-12): the base compose is now
+          # production-shaped — auth=api-key + agent-keygen + fail-closed
+          # placeholder guards. The cold-DB smoke layers in the demo
+          # overlay so the boot path remains zero-config: the overlay
+          # supplies AUTH_TYPE=none + DEMO_MODE_ACK=true + the matching
+          # placeholder creds the fail-closed guards accept under
+          # DEMO_MODE_ACK. The agent service in the overlay also
+          # pre-seeds CERTCTL_AGENT_ID=agent-demo-1 so the bundled
+          # agent doesn't restart-loop. The smoke's purpose (catch
+          # migration-on-cold-DB regressions + verify bootstrap-token
+          # endpoint mints a day-0 admin against a freshly migrated
+          # schema) is orthogonal to whether the auth posture is
+          # demo-mode or api-key, so the overlay is acceptable here.
+          COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.demo.yml)
+
+          # Phase 2 SEC-H3 (2026-05-13): the demo overlay sets
+          # CERTCTL_DEMO_MODE_ACK=true; the SEC-H3 fail-closed guard
+          # requires a paired CERTCTL_DEMO_MODE_ACK_TS within the last
+          # 24h (a static YAML value would rot). The overlay reads
+          # ${CERTCTL_DEMO_MODE_ACK_TS:-} from the shell, so we mint a
+          # fresh timestamp here and export it for every compose
+          # invocation in this job (initial up-d AND the force-recreate
+          # at step 4).
+          export CERTCTL_DEMO_MODE_ACK_TS="$(date +%s)"
+
+          log "1/4 down -v --remove-orphans"
+          docker compose "${COMPOSE_FILES[@]}" down -v --remove-orphans 2>&1 | tail -3 || true
+
+          log "2/4 up -d (cold boot)"
+          docker compose "${COMPOSE_FILES[@]}" up -d 2>&1 | tail -3
+
+          log "3/4 wait for healthchecks"
+          wait_for_service_healthy postgres
+          wait_for_service_healthy certctl-server
+          wait_for_service_healthy certctl-agent || log "  (agent skipped)"
+
+          log "4/4 minting day-0 admin (proves migration ladder + bootstrap path)"
+          TOKEN="$(openssl rand -base64 32 | tr -d '\n')"
+          {
+            echo "CERTCTL_BOOTSTRAP_TOKEN=$TOKEN"
+            # Re-emit the demo-mode ACK TS into the --env-file so the
+            # force-recreate at step 4 inherits it. `--env-file` REPLACES
+            # the shell-env source for variable interpolation on compose
+            # operations that use it, so omitting this line would re-trip
+            # the SEC-H3 guard.
+            echo "CERTCTL_DEMO_MODE_ACK_TS=$CERTCTL_DEMO_MODE_ACK_TS"
+          } > /tmp/_smoke.env
+          docker compose "${COMPOSE_FILES[@]}" --env-file /tmp/_smoke.env up -d --force-recreate certctl-server 2>&1 | tail -2
+          sleep 5
+          wait_for_service_healthy certctl-server
+          BODY="$(http_call POST /api/v1/auth/bootstrap "{\"token\":\"$TOKEN\",\"actor_name\":\"smoke-admin\"}")"
+          KEY="$(echo "$BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["key_value"])')"
+          [ -n "$KEY" ] || { log "bootstrap failed: $BODY"; exit 1; }
+
+          log "PASS — cold boot + force-recreate + admin bootstrap all green"
+          log "tearing down"
+          docker compose "${COMPOSE_FILES[@]}" down -v 2>&1 | tail -2
+
+      - name: Dump compose logs on failure
+        if: failure()
+        working-directory: deploy
+        run: |
+          for svc in postgres certctl-server certctl-agent certctl-tls-init; do
+            echo "==== $svc ===="
+            docker compose -f docker-compose.yml -f docker-compose.demo.yml logs --no-color --tail 200 "$svc" || true
+          done
+
+  frontend-build:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          # ARCH-001-A closure (Sprint 5, 2026-05-16). The
+          # openapi-version-tag-parity guard needs the v* tags to
+          # be present locally so it can confirm openapi.yaml's
+          # info.version matches the latest release. Without
+          # fetch-tags, the guard falls back to the GitHub API —
+          # works but adds a network round-trip per CI run.
+          fetch-tags: true
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: '22'
+
+      - name: Install Dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: npm audit (production deps, high+critical)
+        # Phase 1 TEST-L2 closure (2026-05-13):
+        # Production frontend dependencies must not carry high or
+        # critical CVEs. Dev-only deps (vitest, vite, eslint, etc.)
+        # are excluded via --omit=dev since they never ship to
+        # operators. If this gate fires, triage each finding via npm
+        # overrides, dep upgrade, or a tracked --ignore with an issue
+        # link. Do not mass-silence findings.
+        working-directory: web
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: TypeScript Check
+        working-directory: web
+        run: npx tsc --noEmit
+
+      - name: Run Frontend Tests
+        working-directory: web
+        run: npx vitest run
+
+      - name: Build Frontend
+        working-directory: web
+        run: npx vite build
+
+      - name: Frontend bundle-size budget (size-limit)
+        # Acquisition-audit SCALE-007 closure (Sprint 6 ACQ, 2026-05-16).
+        # Per-chunk + per-tier budgets in web/.size-limit.json; brotli-
+        # compressed sizes match real-world download cost. A regression
+        # that bloats a chunk past its cap fails this step and forces
+        # an explicit operator decision (fix vs raise cap with rationale).
+        # The script wrapper at scripts/ci-guards/G-frontend-bundle-budget.sh
+        # is the local-runnable counterpart; both invoke `npm run size`.
+        working-directory: web
+        run: npm run size
+
+      - name: Regression guards (extracted to scripts/ci-guards/)
+        # All named regression guards live at scripts/ci-guards/<id>.sh per
+        # ci-pipeline-cleanup bundle Phase 1. Each guard is callable locally:
+        #   bash scripts/ci-guards/G-3-env-docs-drift.sh
+        # Adding a new guard: drop a new <id>.sh; this loop auto-picks it up.
+        # Contract: each guard MUST exit 0 on clean repo, non-zero with
+        # ::error:: prefix on regression. See scripts/ci-guards/README.md.
+        run: |
+          set -e
+          fail=0
+          for g in scripts/ci-guards/*.sh; do
+            echo "::group::$(basename "$g")"
+            if ! bash "$g"; then
+              fail=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $fail
+
+  helm-lint:
+    name: Helm Chart Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4  # v4
+        with:
+          version: '3.13.0'
+
+      # HTTPS-Everywhere (v2.0.47): the chart fails render when no TLS source is
+      # configured. Every lint/template invocation below must pick exactly one
+      # provisioning mode — see deploy/helm/certctl/templates/_helpers.tpl
+      # (certctl.tls.required) and docs/operator/tls.md.
+      #
+      # Bundle 3 closure (2026-05-12, commit f1fa311): the chart now ALSO
+      # fails render when (a) server.auth.type=api-key + apiKey empty, or
+      # (b) postgresql.enabled=true + postgresql.auth.password empty.
+      # Every positive render below MUST pass both secrets; inverse tests
+      # at the bottom of this job pin the fail-fast guards in place.
+      - name: Lint Helm Chart
+        run: |
+          helm lint deploy/helm/certctl/ \
+            --set server.tls.existingSecret=certctl-tls-ci \
+            --set server.auth.apiKey=ci-api-key-placeholder \
+            --set postgresql.auth.password=ci-postgres-placeholder
+
+      - name: Template Helm Chart (existingSecret mode)
+        run: |
+          helm template certctl deploy/helm/certctl/ \
+            --set server.tls.existingSecret=certctl-tls-ci \
+            --set server.auth.apiKey=ci-api-key-placeholder \
+            --set postgresql.auth.password=ci-postgres-placeholder \
+            > /dev/null
+
+      - name: Template Helm Chart (cert-manager mode)
+        run: |
+          helm template certctl deploy/helm/certctl/ \
+            --set server.tls.certManager.enabled=true \
+            --set server.tls.certManager.issuerRef.name=letsencrypt-prod \
+            --set server.auth.apiKey=ci-api-key-placeholder \
+            --set postgresql.auth.password=ci-postgres-placeholder \
+            > /dev/null
+
+      - name: Template Helm Chart (external Postgres mode — Bundle 3 D2)
+        run: |
+          # Closes Bundle 3 D2: postgresql.enabled=false must (a) render
+          # cleanly with externalDatabase.url and (b) emit ZERO postgres-*
+          # templates. The render output is grep-checked below.
+          out=$(helm template certctl deploy/helm/certctl/ \
+            --set server.tls.existingSecret=certctl-tls-ci \
+            --set postgresql.enabled=false \
+            --set externalDatabase.url='postgres://u:p@db.example.com:5432/certctl?sslmode=require' \
+            --set server.auth.apiKey=ci-api-key-placeholder)
+          # Bundled-Postgres resources must not appear when postgresql.enabled=false.
+          if echo "$out" | grep -qE "^kind: StatefulSet$"; then
+            echo "::error::Bundle 3 D2 regression: postgres StatefulSet rendered with postgresql.enabled=false"
+            exit 1
+          fi
+          if echo "$out" | grep -q "postgres-secret.yaml"; then
+            echo "::error::Bundle 3 D2 regression: postgres-secret rendered with postgresql.enabled=false"
+            exit 1
+          fi
+
+      - name: Template Helm Chart (guard fails without TLS)
+        run: |
+          # Inverse test: the chart MUST refuse to render when no TLS source is
+          # configured. If this ever renders successfully, the fail-loud guard
+          # in certctl.tls.required has regressed.
+          if helm template certctl deploy/helm/certctl/ > /dev/null 2>&1; then
+            echo "::error::Helm chart rendered without a TLS source — fail-loud guard regressed"
+            exit 1
+          fi
+
+      - name: Template Helm Chart (guard fails — Bundle 3 D7 TLS both-set)
+        run: |
+          # Bundle 3 D7: setting BOTH existingSecret AND certManager.enabled
+          # creates two conflicting TLS sources of truth. Chart must refuse.
+          if helm template certctl deploy/helm/certctl/ \
+                --set server.tls.existingSecret=ci \
+                --set server.tls.certManager.enabled=true \
+                --set server.tls.certManager.issuerRef.name=foo \
+                --set server.auth.apiKey=k \
+                --set postgresql.auth.password=p \
+                > /dev/null 2>&1; then
+            echo "::error::Bundle 3 D7 regression: chart rendered with BOTH TLS sources configured"
+            exit 1
+          fi
+
+      - name: Template Helm Chart (guard fails — Bundle 3 D1 missing apiKey)
+        run: |
+          # Bundle 3 D1: missing server.auth.apiKey when auth.type=api-key
+          # must fail at template time, not silently render an empty Secret.
+          if helm template certctl deploy/helm/certctl/ \
+                --set server.tls.existingSecret=ci \
+                --set postgresql.auth.password=p \
+                > /dev/null 2>&1; then
+            echo "::error::Bundle 3 D1 regression: chart rendered with empty server.auth.apiKey"
+            exit 1
+          fi
+
+      - name: Template Helm Chart (guard fails — Bundle 3 D1 missing pg password)
+        run: |
+          # Bundle 3 D1: missing postgresql.auth.password when postgresql.enabled=true
+          # must fail at template time, not silently use a fallback default.
+          if helm template certctl deploy/helm/certctl/ \
+                --set server.tls.existingSecret=ci \
+                --set server.auth.apiKey=k \
+                > /dev/null 2>&1; then
+            echo "::error::Bundle 3 D1 regression: chart rendered with empty postgresql.auth.password"
+            exit 1
+          fi
+
+      - name: Template Helm Chart (guard fails — Bundle 3 D1 missing external DB URL)
+        run: |
+          # Bundle 3 D1: missing externalDatabase.url when postgresql.enabled=false
+          # must fail at template time.
+          if helm template certctl deploy/helm/certctl/ \
+                --set server.tls.existingSecret=ci \
+                --set postgresql.enabled=false \
+                --set server.auth.apiKey=k \
+                > /dev/null 2>&1; then
+            echo "::error::Bundle 3 D1 regression: chart rendered with postgresql.enabled=false + empty externalDatabase.url"
+            exit 1
+          fi
+
+  # =============================================================================
+  # deploy-vendor-e2e — single-job (collapsed from 12-job matrix)
+  # =============================================================================
+  # Per ci-pipeline-cleanup bundle Phase 5 / frozen decision 0.4 (revises
+  # Bundle II decision 0.9): the per-vendor matrix produced 12 status-check
+  # rows for ~1 real assertion (115/116 vendor-edge tests are t.Log
+  # placeholders). Collapsed to one job that brings up all 11 sidecars
+  # at once and runs the full VendorEdge_ test set.
+  #
+  # Skip-detection guard (scripts/vendor-e2e-skip-check.sh)
+  # enforces that no test SKIPs except the documented allowlist
+  # (windows-iis-requiring tests on Linux). If a sidecar fails to come
+  # up, requireSidecar() in deploy/test/vendor_e2e_helpers.go calls
+  # t.Skipf() — the guard catches that.
+  #
+  # RAM headroom on ubuntu-latest (16 GB ceiling) — operator-confirmed
+  # in Phase 0 / frozen decision 0.14 prototype-branch run. If RAM
+  # regresses, fall back to bucketed matrix per
+  # the project's frozen-decisions log.
+  #
+  # The Windows matrix (deploy-vendor-e2e-windows) was deleted entirely
+  # per Phase 6 / frozen decision 0.5 (revises Bundle II decision 0.4).
+  # IIS + WinCertStore validation moved to the operator playbook at
+  # docs/connector-iis.md::Operator validation playbook.
+  deploy-vendor-e2e:
+    name: deploy-vendor-e2e
+    runs-on: ubuntu-latest
+    needs: [go-build-and-test]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+        with:
+          go-version: '1.25.10'
+          cache: true
+
+      - name: Build f5-mock-icontrol sidecar
+        # The only sidecar without a published image; built from the in-tree
+        # Go server at deploy/test/f5-mock-icontrol/.
+        run: docker compose --profile deploy-e2e -f deploy/docker-compose.test.yml build f5-mock-icontrol
+
+      - name: Bring up all vendor sidecars
+        # Brings up the 11 deploy-e2e sidecars (apache-test, haproxy-test,
+        # traefik-test, caddy-test, envoy-test, postfix-test, dovecot-test,
+        # openssh-test, f5-mock-icontrol, k8s-kind-test, windows-iis-test
+        # which is gated by a separate windows-only profile and won't
+        # actually start) plus the always-on legacy nginx.
+        run: |
+          docker compose --profile deploy-e2e -f deploy/docker-compose.test.yml up -d
+          sleep 15
+
+      - name: Run all vendor-edge e2e
+        # Captures test output for skip-count enforcement (next step).
+        env:
+          INTEGRATION: "1"
+        run: |
+          go test -tags integration -race -count=1 -run 'VendorEdge_' \
+            ./deploy/test/... 2>&1 | tee test-output.log
+
+      - name: Skip-count enforcement
+        # ci-pipeline-cleanup Phase 5 / frozen decision 0.6:
+        # requireSidecar uses t.Skipf (not t.Fatal) when a sidecar isn't
+        # reachable — collapsing the per-vendor matrix removes the implicit
+        # guard each per-job matrix entry provided. This step counts SKIP
+        # lines in the test output and fails the build if it exceeds the
+        # allowlist (windows-iis-requiring tests; legitimately skipped
+        # on Linux per Phase 6 / frozen decision 0.5).
+        run: bash scripts/vendor-e2e-skip-check.sh test-output.log
+
+      - name: Diagnostic dump on failure
+        # Prints container status + last 200 log lines from the certctl-server
+        # and base-stack containers when ANY previous step in this job fails.
+        # The matrix-collapse (Phase 5) brings up ~18 containers concurrently
+        # (vs 1 vendor sidecar at a time pre-collapse); transient failures
+        # surface most often as "container certctl-test-server is unhealthy"
+        # without any visible reason because compose only reports the
+        # dependency-chain symptom, not the root cause. Dumping logs here
+        # makes the underlying error (DB migration crash, port bind failure,
+        # entrypoint stall, OOM kill) visible in the GitHub Actions log
+        # without requiring a workstation reproduction.
+        if: failure()
+        run: |
+          echo "=== docker compose ps -a ==="
+          docker compose --profile deploy-e2e -f deploy/docker-compose.test.yml ps -a || true
+          echo ""
+          echo "=== certctl-test-server logs (last 200 lines) ==="
+          docker logs --tail 200 certctl-test-server 2>&1 || true
+          echo ""
+          echo "=== certctl-test-tls-init logs ==="
+          docker logs certctl-test-tls-init 2>&1 || true
+          echo ""
+          echo "=== certctl-test-postgres logs (last 100 lines) ==="
+          docker logs --tail 100 certctl-test-postgres 2>&1 || true
+          echo ""
+          echo "=== certctl-test-stepca logs (last 100 lines) ==="
+          docker logs --tail 100 certctl-test-stepca 2>&1 || true
+          echo ""
+          echo "=== certctl-test-pebble logs (last 50 lines) ==="
+          docker logs --tail 50 certctl-test-pebble 2>&1 || true
+          echo ""
+          echo "=== certctl-test-agent logs (last 100 lines) ==="
+          docker logs --tail 100 certctl-test-agent 2>&1 || true
+
+      - name: Tear down sidecars
+        if: always()
+        run: docker compose --profile deploy-e2e -f deploy/docker-compose.test.yml down -v
+
+  # =============================================================================
+  # image-and-supply-chain — digest validity + Docker build smoke + OpenAPI parity
+  # =============================================================================
+  # Per ci-pipeline-cleanup bundle Phases 7-9 / frozen decision 0.8.
+  # Three checks bundled into one job (parallel to go-build-and-test):
+  #   1. Digest validity — every @sha256 ref in deploy/* + Dockerfiles must
+  #      resolve on its registry. Closes the H-001 lying-field gap (H-001
+  #      verifies digest *presence* but not *resolution* — Bundle II shipped
+  #      11 fabricated digests that passed H-001 and failed `docker pull`).
+  #   2. Docker build smoke — all 4 Dockerfiles in the repo must build.
+  #      Catches syntax errors / COPY path drift before tag-time release.yml.
+  #   3. OpenAPI ↔ handler parity — every router route has a matching
+  #      operationId or is documented in api/openapi-handler-exceptions.yaml.
+  image-and-supply-chain:
+    name: image-and-supply-chain
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+        with:
+          go-version: '1.25.10'
+          cache: true
+
+      - name: Digest validity (every @sha256 ref must resolve)
+        run: bash scripts/ci-guards/digest-validity.sh
+
+      - name: Docker build smoke (all 4 Dockerfiles)
+        # Per frozen decision 0.10: build all 4 Dockerfiles in the repo,
+        # not just production server + agent. The test-sidecar Dockerfiles
+        # are load-bearing for vendor-e2e — a syntax error there silently
+        # breaks the e2e suite.
+        run: |
+          set -e
+          docker build -f Dockerfile        -t certctl:smoke           .
+          docker build -f Dockerfile.agent  -t certctl-agent:smoke     .
+          docker build -f deploy/test/f5-mock-icontrol/Dockerfile -t f5-mock:smoke .
+          docker build -f deploy/test/libest/Dockerfile           -t libest:smoke   .
+          echo "All 4 Dockerfiles build clean."
+
+      - name: OpenAPI ↔ handler operationId parity
+        run: bash scripts/ci-guards/openapi-handler-parity.sh

@@ -1,0 +1,99 @@
+1. Get the certctl Server URL by running:
+{{- if .Values.ingress.enabled }}
+  https://{{ index .Values.ingress.hosts 0 "host" }}
+{{- else if contains "NodePort" .Values.server.service.type }}
+  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+  export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "certctl.fullname" . }}-server)
+  echo https://$NODE_IP:$NODE_PORT
+{{- else if contains "LoadBalancer" .Values.server.service.type }}
+  export SERVICE_IP=$(kubectl get svc --namespace {{ .Release.Namespace }} {{ include "certctl.fullname" . }}-server --template "{.status.loadBalancer.ingress[0].ip}")
+  echo https://$SERVICE_IP:{{ .Values.server.service.port }}
+{{- else }}
+  export POD_NAME=$(kubectl get pods --namespace {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "certctl.name" . }},app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=server" -o jsonpath="{.items[0].metadata.name}")
+  export CONTAINER_PORT=$(kubectl get pod --namespace {{ .Release.Namespace }} $POD_NAME -o jsonpath="{.spec.containers[0].ports[0].containerPort}")
+  echo "Visit https://127.0.0.1:8443 to use your application"
+  kubectl --namespace {{ .Release.Namespace }} port-forward $POD_NAME 8443:$CONTAINER_PORT
+{{- end }}
+
+2. Talk to the HTTPS-only server from your workstation:
+  # Export the CA bundle that signed the server cert (self-signed or cert-manager-issued)
+  kubectl get secret --namespace {{ .Release.Namespace }} {{ include "certctl.tls.secretName" . }} \
+    -o jsonpath='{.data.ca\.crt}' | base64 --decode > /tmp/certctl-ca.crt
+  # (If ca.crt is empty, fall back to tls.crt — typical when the Secret
+  #  was created from a self-signed bootstrap cert without a separate CA.)
+
+  # Adapt the URL below to match the Server URL printed in step 1.
+  curl --cacert /tmp/certctl-ca.crt https://127.0.0.1:8443/health
+
+3. Get the default API key:
+  kubectl get secret --namespace {{ .Release.Namespace }} {{ include "certctl.fullname" . }}-server -o jsonpath="{.data.api-key}" | base64 --decode; echo
+
+4. Get PostgreSQL connection details:
+  Host: {{ include "certctl.fullname" . }}-postgres.{{ .Release.Namespace }}.svc.cluster.local
+  Port: 5432
+  Database: {{ .Values.postgresql.auth.database }}
+  Username: {{ .Values.postgresql.auth.username }}
+  Password: $(kubectl get secret --namespace {{ .Release.Namespace }} {{ include "certctl.fullname" . }}-postgres -o jsonpath="{.data.password}" | base64 --decode)
+
+5. Check deployment status:
+  kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+
+6. View server logs:
+  kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "certctl.name" . }},app.kubernetes.io/component=server -f
+
+{{- if .Values.agent.enabled }}
+
+7. View agent logs:
+  kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "certctl.name" . }},app.kubernetes.io/component=agent -f
+
+{{- end }}
+
+IMPORTANT NOTES FOR PRODUCTION:
+
+1. Update the API key for security:
+   kubectl patch secret {{ include "certctl.fullname" . }}-server -n {{ .Release.Namespace }} \
+     -p '{"data":{"api-key":"'$(echo -n "YOUR_NEW_API_KEY" | base64)'"}}'
+
+2. Update PostgreSQL password:
+   kubectl patch secret {{ include "certctl.fullname" . }}-postgres -n {{ .Release.Namespace }} \
+     -p '{"data":{"password":"'$(echo -n "YOUR_NEW_PASSWORD" | base64)'"}}'
+
+3. Configure certificate issuers (ACME, step-ca, etc.) via values.yaml:
+   helm upgrade {{ .Release.Name }} certctl/certctl \
+     --set server.issuer.acme.enabled=true \
+     --set server.issuer.acme.directoryURL=https://acme-v02.api.letsencrypt.org/directory \
+     --set server.issuer.acme.email=admin@example.com
+
+4. For production with persistent databases and backups:
+   - Use an external PostgreSQL managed service (AWS RDS, Cloud SQL, etc.)
+   - Set postgresql.enabled=false and configure CERTCTL_DATABASE_URL in values
+
+5. Review security contexts and network policies:
+   - All containers run as non-root
+   - Implement network policies to restrict traffic between components
+   - Consider pod security policies or security standards for your cluster
+{{- /*
+  DEPL-006 closure (Sprint 3, 2026-05-16). Loud notice when the
+  operator runs a multi-replica deploy without crossing the two
+  required HA toggles. Per-pod rate-limit buckets and round-robin
+  load balancing both silently break correctness above replicas:1.
+*/}}
+{{- if gt (int .Values.server.replicas) 1 }}
+
+⚠️  HA MISCONFIGURATION WARNINGS (replicas={{ .Values.server.replicas }}):
+{{- $backend := .Values.server.rateLimiting.backend | default "memory" }}
+{{- if eq $backend "memory" }}
+   - server.rateLimiting.backend = "memory" with replicas > 1 gives each
+     pod its own bucket map, so the configured cap is effectively
+     multiplied by the replica count. Set
+     `--set server.rateLimiting.backend=postgres` (see DEPL-006 /
+     docs/operator/runbooks/ha.md).
+{{- end }}
+{{- if not .Values.server.service.sessionAffinity }}
+   - server.service.sessionAffinity is empty. Round-robin Service load
+     balancing routes login → /api/v1/auth/login → /api/v1/auth/csrf
+     across different pods, breaking the CSRF token + session cookie
+     handshake. Set
+     `--set server.service.sessionAffinity=ClientIP`.
+{{- end }}
+{{- end }}

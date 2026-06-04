@@ -1,0 +1,916 @@
+# Default values for certctl Helm chart
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Namespace override (optional)
+namespace: ""
+
+# Global configuration
+commonLabels: {}
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# ==============================================================================
+# Certctl Server Configuration
+# ==============================================================================
+server:
+  # Number of replicas (for HA deployments).
+  # Phase 2 DEPL-H1: production HA is operator-opt-in across this field
+  # + podDisruptionBudget.enabled + server.service.sessionAffinity.
+  # See docs/operator/runbooks/ha.md for the smallest-possible HA overlay.
+  replicas: 1
+
+  # Image configuration
+  image:
+    repository: ghcr.io/certctl-io/certctl
+    tag: "" # defaults to Chart.appVersion
+    pullPolicy: IfNotPresent
+
+  # Server port
+  port: 8443
+
+  # Resource requests and limits
+  #
+  # Phase 4 DEPL-M5 (2026-05-14): per-fleet-size tuning ladder. The
+  # default values below are validated against the demo dataset
+  # (15 certs / 1 agent) and the baselines in
+  # docs/operator/performance-baselines.md (single endpoint < 5s for
+  # 100 sequential requests = ~50ms p50; cursor-paginated 1000-cert
+  # inventory walk < 3s; renewal scan for 15 certs < 100ms).
+  #
+  # Larger fleet recommendations (TBD pending Phase 8 load-test runs;
+  # operators tune empirically until then — capture readings in your
+  # own loadtest-baselines log):
+  #
+  #   ≤ 500 certs / 100 agents:      defaults below                  (100m / 128Mi req, 500m / 512Mi lim)
+  #   5K certs / 1K agents:          tune up — TBD Phase 8           (suggested starter: 500m / 512Mi req, 2000m / 2Gi lim)
+  #   50K certs / 10K agents:        tune up — TBD Phase 8           (suggested starter: 2000m / 2Gi req, 4000m / 4Gi lim)
+  #
+  # The "suggested starter" values above are operator-tuning starting
+  # points, NOT validated. Phase 8 (load test coverage expansion) will
+  # measure them against synthetic fleets and replace the suggestions
+  # with measured ceilings. Until then, treat them as a "raise CPU
+  # before raising memory; raise both before scaling out" mental
+  # model. Per docs/operator/performance-baselines.md, certctl-server
+  # is CPU-bound on issuance / renewal scan work and memory-bound on
+  # the inventory query path.
+  #
+  # Database scale (postgresql.* below) tracks server scale roughly
+  # 1:1 — at 50K certs the Postgres instance needs 4 CPU / 4Gi RAM
+  # and shared_buffers ≥ 1Gi. Postgres tuning is out of scope for
+  # this comment; see docs/operator/runbooks/postgres-backup.md
+  # for the production-tuning entry-point.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  # Pod security context
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+
+  # Liveness and readiness probes (HTTPS-only as of v2.2).
+  #
+  # The two paths exposed for probes are `/health` and `/ready` —
+  # registered in internal/api/router/router.go:76-85 and bypassing the
+  # auth middleware via the no-auth list at cmd/server/main.go:920.
+  # Both serve the same JSON shape today (`{"status":"healthy"}` /
+  # `{"status":"ready"}`) but exist as separate routes so liveness and
+  # readiness can diverge in the future without renaming.
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: https
+      scheme: HTTPS
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  # U-2 (P1, cat-u-healthcheck_protocol_mismatch — adjacent fix): pre-U-2
+  # the readiness probe pointed at `/readyz`, the conventional kube-flavor
+  # name. The certctl server doesn't register `/readyz` (only `/health`
+  # and `/ready`) — see cmd/server/main.go:920 and
+  # internal/api/router/router.go:81. K8s readiness probes therefore
+  # received a 404 (or, with auth enabled, a 401 from the api-key middleware
+  # because `/readyz` was NOT in the no-auth bypass set), pods stayed
+  # `NotReady` indefinitely, and Helm rollouts stalled. Post-U-2 the path
+  # matches a registered route.
+  readinessProbe:
+    httpGet:
+      path: /ready
+      port: https
+      scheme: HTTPS
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 2
+
+  # TLS configuration — REQUIRED. HTTPS is the only supported mode (v2.2+).
+  # Operator must configure EXACTLY ONE of:
+  #   (a) server.tls.existingSecret: <name>        # pre-existing kubernetes.io/tls Secret
+  #   (b) server.tls.certManager.enabled: true     # provision a cert-manager Certificate CR
+  # Refusing to set either makes `helm template` fail with a diagnostic pointing at docs/tls.md.
+  tls:
+    # Name of a pre-existing Secret (type kubernetes.io/tls) holding tls.crt + tls.key (+ optional ca.crt).
+    # Leave empty to fall through to the cert-manager path.
+    existingSecret: ""
+
+    # Mount path for the TLS Secret inside the server + agent containers.
+    mountPath: /etc/certctl/tls
+
+    # cert-manager auto-provisioning. Opt-in (off by default per milestone §3.4).
+    certManager:
+      enabled: false
+
+      # Secret name the cert-manager Certificate CR writes into. Agents and the server
+      # both read from this Secret. If empty, defaults to "<fullname>-tls".
+      secretName: ""
+
+      # Cert-manager issuer reference.
+      issuerRef:
+        name: ""                      # e.g. "letsencrypt-prod" or "internal-ca"
+        kind: ClusterIssuer           # ClusterIssuer or Issuer
+        group: cert-manager.io
+
+      # Subject fields on the issued cert.
+      commonName: "certctl-server"
+      dnsNames:
+        - certctl-server
+        - localhost
+
+      # Certificate lifetime + renewal window.
+      duration: 2160h                 # 90 days
+      renewBefore: 360h               # 15 days
+
+  # Service type (ClusterIP, LoadBalancer, NodePort)
+  service:
+    type: ClusterIP
+    port: 8443
+    annotations: {}
+    # DEPL-006 closure (Sprint 3, 2026-05-16). Optional sticky-session
+    # routing. REQUIRED when server.replicas > 1 so login + CSRF token
+    # rows stay on the same pod for the duration of a session — the
+    # default round-robin load balancing breaks those flows. Set to
+    # "ClientIP" for production HA (see deploy/helm/examples/values-prod-ha.yaml).
+    # Leave empty for single-replica deploys.
+    sessionAffinity: ""
+    # When sessionAffinity is set, timeout window (in seconds) the
+    # Service maps a source IP to the same pod. Default null →
+    # Kubernetes applies its built-in default (10800s / 3h).
+    sessionAffinityTimeoutSeconds: null
+
+  # Authentication configuration.
+  # Valid types: "api-key" (production) or "none" (demo only — disables
+  # authentication on the API and logs a loud Warn at server startup).
+  # For JWT/OIDC, run an authenticating gateway in front of certctl
+  # (oauth2-proxy / Envoy ext_authz / Traefik ForwardAuth / Pomerium)
+  # and set type=none here so the gateway terminates federated identity.
+  # See docs/architecture.md "Authenticating-gateway pattern".
+  #
+  # G-1 (P1): pre-G-1 the chart accepted server.auth.type=jwt and the
+  # certctl-server container silently routed every request through the
+  # api-key bearer middleware — silent auth downgrade. Post-G-1 the
+  # chart's `certctl.validateAuthType` template helper rejects any value
+  # outside {api-key, none} at template time. See
+  # docs/upgrade-to-v2-jwt-removal.md if you previously set type=jwt.
+  auth:
+    type: api-key
+    apiKey: ""     # REQUIRED when type=api-key (set via --set or values override).
+
+  # Logging configuration
+  logging:
+    level: info  # debug, info, warn, error
+    format: json  # json or text
+
+  # SMTP configuration for email notifications (optional)
+  smtp:
+    enabled: false
+    host: ""
+    port: 587
+    username: ""
+    password: ""
+    fromAddress: ""
+    useTLS: true
+
+  # Certificate digest digest (periodic email summary)
+  digest:
+    enabled: false
+    interval: "24h"
+    recipients: []
+    # Example:
+    # - admin@example.com
+    # - ops@example.com
+
+  # Enrollment over Secure Transport (EST) configuration
+  est:
+    enabled: false
+    issuerID: "iss-local"
+    profileID: ""
+
+  # Rate limiting configuration
+  rateLimiting:
+    rps: 100      # Requests per second (token-bucket middleware)
+    burst: 200    # Burst capacity (token-bucket middleware)
+
+    # Sliding-window-log rate-limit backend (Phase 13 Sprint 13.2/13.3
+    # ARCH-M1 closure). Selects the implementation backing the
+    # break-glass / OCSP / cert-export / EST limiters. See
+    # docs/operator/observability.md for the operator decision tree.
+    #
+    #   memory   — per-process (default; single-replica deploys).
+    #   postgres — cross-replica-consistent via rate_limit_buckets.
+    #              REQUIRED when server.replicas > 1 for accurate
+    #              cluster-wide enforcement.
+    backend: memory
+
+    # Scheduler janitor interval for the postgres backend's
+    # rate_limit_buckets sweep. Ignored when backend=memory (the
+    # in-memory backend self-prunes on every Allow call).
+    # Default 5m; minimum 1m.
+    janitorInterval: "5m"
+
+  # Network scanning configuration
+  networkScan:
+    enabled: false
+    interval: "6h"
+
+  # Certificate key generation mode
+  keygen:
+    mode: agent   # Options: agent (production), server (demo with warning)
+
+  # CORS configuration
+  cors:
+    origins: ""   # Comma-separated list, empty means deny all cross-origin requests
+
+  # Issuer connectors configuration
+  issuer:
+    local:
+      enabled: true
+      # For sub-CA mode, provide these paths:
+      # caCertPath: /path/to/ca.crt
+      # caKeyPath: /path/to/ca.key
+
+    acme:
+      enabled: false
+      directoryURL: ""
+      email: ""
+      challengeType: "http-01"  # Options: http-01, dns-01, dns-persist-01
+      # DNS configuration (for dns-01 or dns-persist-01)
+      # dnsPresentScript: /path/to/dns-present.sh
+      # dnsCleanupScript: /path/to/dns-cleanup.sh
+      # dnsPropagationWait: "30s"
+      # dnsPersistIssuerDomain: "validation.example.com"
+      # EAB configuration (for ZeroSSL, Google Trust Services, etc.)
+      # eabKid: ""
+      # eabHmac: ""
+
+    stepca:
+      enabled: false
+      # rootCAPath: /path/to/root_ca.crt
+      # intermediateCAPath: /path/to/intermediate_ca.crt
+      # provisionerName: ""
+      # provisionerPassword: ""
+
+    openssl:
+      enabled: false
+      # signScript: /path/to/sign.sh
+      # revokeScript: /path/to/revoke.sh
+      # crlScript: /path/to/crl.sh
+      # timeoutSeconds: 30
+
+  # Notifier connectors configuration
+  notifiers:
+    slack:
+      enabled: false
+      # webhookUrl: ""
+      # channel: ""
+      # username: ""
+      # iconEmoji: ""
+
+    teams:
+      enabled: false
+      # webhookUrl: ""
+
+    pagerduty:
+      enabled: false
+      # routingKey: ""
+      # severity: warning
+
+    opsgenie:
+      enabled: false
+      # apiKey: ""
+      # priority: P3
+
+  # Additional environment variables
+  # Will be passed as-is to the server container
+  env: {}
+  # Example:
+  # CERTCTL_SCHEDULER_RENEWAL_CHECK_INTERVAL: "1h"
+  # CERTCTL_DATABASE_MAX_CONNS: "25"
+
+  # Additional volume mounts for custom configurations
+  # volumeMounts: []
+  # - name: ca-cert
+  #   mountPath: /etc/ssl/certs/ca.crt
+  #   subPath: ca.crt
+
+  # Additional volumes
+  # volumes: []
+  # - name: ca-cert
+  #   secret:
+  #     secretName: ca-cert
+
+# ==============================================================================
+# External Database Configuration (Bundle 3 closure / D2 + OPS-L2)
+# ==============================================================================
+# When postgresql.enabled=false, the chart skips the bundled StatefulSet +
+# Secret + Service and instead consumes the URL below verbatim as the
+# server's CERTCTL_DATABASE_URL. The URL embeds username, password,
+# host, port, database, and sslmode — operators are responsible for
+# rotating credentials in this string out-of-band (Kubernetes Secret +
+# helm upgrade is the supported pattern).
+#
+# Recommended sslmode for managed Postgres (RDS, Cloud SQL, Azure DB):
+#   verify-full  — PCI-DSS Req 4 v4.0 §2.2.5 compliant; requires CA bundle.
+#                  Mount the CA via server.volumes / server.volumeMounts and
+#                  set sslrootcert=/path/in/pod/ca.crt in the URL.
+#
+# Example values overrides:
+#   postgresql.enabled: false
+#   externalDatabase.url: "postgres://certctl:HUNTER2@db.example.com:5432/certctl?sslmode=verify-full"
+#
+# Migration from the legacy `server.env.CERTCTL_DATABASE_URL` workaround:
+# both still work (env block overrides the helper-emitted Secret value at
+# pod-spec level), but the new path renders cleaner manifests with no
+# stranded postgres-* templates.
+externalDatabase:
+  # Connection string used when postgresql.enabled=false.
+  # Required in that mode — see certctl.requiredSecrets helper.
+  url: ""
+
+# ==============================================================================
+# PostgreSQL Configuration
+# ==============================================================================
+postgresql:
+  # Enable/disable PostgreSQL (set to false if using external database)
+  enabled: true
+
+  # Image configuration
+  image:
+    repository: postgres
+    tag: "16-alpine"
+    pullPolicy: IfNotPresent
+
+  # Authentication
+  auth:
+    database: certctl
+    username: certctl
+    # REQUIRED — set via `--set postgresql.auth.password=<value>` or values override.
+    #
+    # WARNING (U-1): rotating this value after first deploy does NOT change the
+    # database password. The `postgres:16-alpine` image runs `initdb` only when
+    # /var/lib/postgresql/data is empty, so POSTGRES_PASSWORD is written into
+    # pg_authid exactly once — on the first boot of the StatefulSet's PVC.
+    # Subsequent rollouts pick up the new env value in the postgres container
+    # but the certctl-server container's CERTCTL_DATABASE_URL also picks up
+    # the new value, while pg_authid still expects the old one — leading to
+    # `pq: password authentication failed for user "certctl"` (SQLSTATE 28P01).
+    #
+    # The certctl-server emits guidance via internal/repository/postgres/db.go::
+    # wrapPingError when it sees SQLSTATE 28P01 at startup. To resolve in a
+    # Helm deployment:
+    #   - Non-destructive (preferred for environments with data):
+    #       kubectl exec -it <release>-postgres-0 -- \
+    #         psql -U certctl -c "ALTER ROLE certctl PASSWORD '<new>';"
+    #     then update the secret/values to match and let the certctl-server
+    #     pod restart against the matching credential.
+    #   - Destructive (DESTROYS DATA — only acceptable on dev/demo PVCs):
+    #       helm uninstall <release> && \
+    #       kubectl delete pvc -l app.kubernetes.io/name=certctl,app.kubernetes.io/component=postgres && \
+    #       helm install <release> ...  # PVC re-creates empty, initdb seeds new password
+    password: ""
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Bundle B / Audit M-018 (PCI-DSS Req 4 / CWE-319): TLS to Postgres
+  # ─────────────────────────────────────────────────────────────────────
+  # postgresql.tls.mode is wired into the database-url sslmode parameter
+  # (see templates/_helpers.tpl::certctl.databaseURL).
+  #
+  # Acceptable values (lib/pq):
+  #   disable     — no TLS (default, preserves in-cluster pod-to-pod
+  #                 traffic on the K8s pod network).
+  #   require     — TLS required, no certificate verification.
+  #   verify-ca   — TLS required + verify CA chain.
+  #   verify-full — TLS required + verify CA chain + verify hostname.
+  #
+  # PCI-DSS Req 4 v4.0 §2.2.5 requires verify-ca or verify-full when the
+  # database carries sensitive data crossing untrusted networks (RDS,
+  # Cloud SQL, cross-VPC, etc). The bundled Helm Postgres runs in the
+  # same pod network as certctl-server; sslmode=disable is acceptable
+  # there only when the cluster CNI provides L2/L3 encryption (Cilium
+  # WireGuard, Calico Wireguard, Tailscale operator, etc).
+  #
+  # When mode != disable AND tls.caSecretRef is set, the CA bundle is
+  # mounted at /etc/postgresql-ca/ca.crt and the server's PGSSLROOTCERT
+  # env points there. caSecretRef must reference an existing Secret with
+  # a "ca.crt" key.
+  tls:
+    mode: disable
+    # caSecretRef: ""  # Secret with ca.crt key (required for verify-ca/verify-full)
+
+  # Storage configuration
+  storage:
+    size: 10Gi
+    storageClass: ""  # Uses default StorageClass if empty
+    # deleteOnTermination: false  # Keep data on Helm uninstall
+
+  # Resource requests and limits
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  # Pod security context
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+
+  # Liveness and readiness probes
+  livenessProbe:
+    exec:
+      command:
+        - /bin/sh
+        - -c
+        - pg_isready -U certctl -d certctl
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  readinessProbe:
+    exec:
+      command:
+        - /bin/sh
+        - -c
+        - pg_isready -U certctl -d certctl
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 2
+
+  # Service configuration
+  service:
+    type: ClusterIP
+    port: 5432
+
+  # PostgreSQL-specific settings
+  postgresqlConfig: {}
+  # Example:
+  # max_connections: "200"
+  # shared_buffers: "256MB"
+
+# ==============================================================================
+# Certctl Agent Configuration
+# ==============================================================================
+agent:
+  # Enable/disable agent deployment
+  enabled: true
+
+  # Deployment strategy: DaemonSet (recommended) or Deployment
+  kind: DaemonSet  # Options: DaemonSet, Deployment
+
+  # Image configuration
+  image:
+    repository: ghcr.io/certctl-io/certctl-agent
+    tag: ""  # defaults to Chart.appVersion
+    pullPolicy: IfNotPresent
+
+  # Number of replicas (for Deployment kind; ignored for DaemonSet)
+  replicas: 1
+
+  # Resource requests and limits
+  #
+  # Phase 4 DEPL-M5 (2026-05-14): per-fleet-size tuning ladder for the
+  # agent. Defaults are sized for the standard "one cert per host"
+  # operating pattern: the agent polls the server every 30 seconds
+  # (hardcoded in cmd/agent/main.go::pollInterval — not yet
+  # env-configurable), generates ECDSA P-256 keys locally on
+  # issuance/renewal events, and is otherwise idle. CPU is bursty only
+  # during keygen + CSR submission.
+  #
+  # Tuning ladder (TBD pending Phase 8 — measure on your fleet):
+  #
+  #   1 cert / host (typical):        defaults below            (50m / 64Mi req, 200m / 256Mi lim)
+  #   10 certs / host:                stays at defaults — agent is poll-driven, not work-bound by cert count
+  #   100 certs / host (rare):        raise lim to 500m / 512Mi if you see throttling on issuance bursts
+  #
+  # The agent does NOT cache certs in memory — issuance is one-shot
+  # generate-then-deploy. So per-host memory scales with whatever
+  # truststore PEM bundles the agent's connectors load (Apache /
+  # Postfix / similar), not with the cert count. Defaults are
+  # appropriate for any "agent terminates ≤ 100 certs on this host"
+  # deployment.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+  # Pod security context
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+
+  # Agent name (can be overridden per pod via StatefulSet ordinals)
+  name: ""  # If empty, uses release name
+
+  # Key storage directory
+  keyDir: /var/lib/certctl/keys
+
+  # Certificate discovery directories (comma-separated)
+  discoveryDirs: ""
+  # Example: "/etc/ssl/certs,/etc/pki/tls"
+
+  # Node selector for agent pods (for DaemonSet)
+  nodeSelector: {}
+  # Example:
+  # node-role.kubernetes.io/worker: "true"
+
+  # Tolerations for agent pods
+  tolerations: []
+  # Example:
+  # - key: node-role
+  #   operator: Equal
+  #   value: worker
+  #   effect: NoSchedule
+
+  # Affinity rules
+  affinity: {}
+
+  # Additional environment variables
+  env: {}
+
+# ==============================================================================
+# Ingress Configuration
+# ==============================================================================
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+
+  # Optional cert-manager integration for the public-facing Ingress cert.
+  # This is completely independent of server.tls.* — the Ingress terminates
+  # an *additional* TLS hop between the internet and the in-cluster Service.
+  # Leave disabled unless an Ingress is exposing certctl to the outside world.
+  certManager:
+    enabled: false
+    issuerRef:
+      name: ""                      # e.g. "letsencrypt-prod"
+      kind: ClusterIssuer           # ClusterIssuer or Issuer
+  hosts:
+    - host: certctl.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+    # - secretName: certctl-tls
+    #   hosts:
+    #     - certctl.local
+
+# ==============================================================================
+# Service Account Configuration
+# ==============================================================================
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""  # defaults to release name if empty
+
+# ==============================================================================
+# RBAC Configuration
+# ==============================================================================
+rbac:
+  create: true
+
+# ==============================================================================
+# Kubernetes Secrets Target Connector (PREVIEW — Bundle 3 closure / C3)
+# ==============================================================================
+# Bundle 3 audit closure (C3): the connector framework at
+# internal/connector/target/k8ssecret/ ships the Config + interface +
+# 14 unit tests, but the production K8s client at
+# k8ssecret.go::realK8sClient is documented as "a stub placeholder for
+# the real k8s.io/client-go implementation". The repo does not import
+# k8s.io/client-go (verified via `grep -n "client-go" go.mod`), so the
+# connector cannot deploy to a real cluster today.
+#
+# Setting kubernetesSecrets.enabled=true wires up the RBAC verbs the
+# real client will need (get/create/update/patch/delete on Secrets)
+# without making the connector functional — operators trying to use it
+# get the stub's error and a pointer to this note.
+#
+# Status: PREVIEW. Production client lands when the cluster-management
+# bundle ships (tracked in WORKSPACE-ROADMAP.md). Until then,
+# in-cluster deploys use the file-based connectors (NGINX, Apache,
+# HAProxy, etc.) via a Pod-mounted Secret + DaemonSet agent.
+kubernetesSecrets:
+  enabled: false
+
+# ==============================================================================
+# Pod Disruption Budget (for HA deployments).
+# Phase 2 DEPL-H1: defaults to enabled=false because a PDB template
+# rendered at `replicas: 1` blocks every rolling restart on a
+# single-node cluster. Production HA flips this to true alongside
+# server.replicas ≥ 2. See docs/operator/runbooks/ha.md.
+# ==============================================================================
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+  # maxUnavailable: 1
+
+# ==============================================================================
+# Monitoring Configuration
+# ==============================================================================
+# Bundle 3 closure (D5): the ServiceMonitor template at
+# templates/servicemonitor.yaml renders when both monitoring.enabled=true
+# AND monitoring.serviceMonitor.enabled=true. The endpoint scrapes
+# /api/v1/metrics/prometheus, which is rbac-gated on `metrics.read` —
+# operators MUST provide a bearer token via
+# monitoring.serviceMonitor.bearerTokenSecret pointing at a Secret with
+# an API key holding that permission. Without the token, scrapes 401.
+monitoring:
+  enabled: false
+  # Prometheus ServiceMonitor
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    # Additional labels applied to the ServiceMonitor metadata.
+    # labels: {}
+    # Bearer-token Secret reference (required when the certctl server's
+    # /api/v1/metrics/prometheus endpoint is gated by api-key auth).
+    # Example:
+    #   bearerTokenSecret:
+    #     name: certctl-prometheus-key
+    #     key: api-key
+    # bearerTokenSecret: {}
+    # TLS config for the scrape endpoint. Acquisition-audit DEPL-004
+    # closure (Sprint 6 ACQ, 2026-05-16): pre-Sprint-6 the default was
+    # an implicit `insecureSkipVerify: true` (fell through the
+    # template's else-branch). Post-Sprint-6 the default is a real
+    # verify against the chart's CA at the canonical mount path the
+    # existingSecret pattern produces (Prometheus mounts the
+    # certctl-ca Secret as a volume at /etc/prometheus/secrets/
+    # certctl-ca/). Operators whose Prometheus pod mounts the bundle
+    # at a different path override `caFile` below; operators who
+    # genuinely want skipVerify back can do so explicitly. Operators
+    # who blank tlsConfig entirely (`tlsConfig: null` or
+    # `tlsConfig: {}`) trip the `{{ fail }}` guard in
+    # templates/servicemonitor.yaml at chart-render time — there is
+    # no way to inherit the pre-Sprint-6 implicit-skipVerify behavior
+    # silently.
+    #
+    # Production default (verify against the chart's CA):
+    tlsConfig:
+      caFile: /etc/prometheus/secrets/certctl-ca/ca.crt
+      serverName: certctl-server
+    #
+    # Operator override — different CA mount path:
+    # tlsConfig:
+    #   caFile: /path/to/your/ca.crt
+    #   serverName: your-cert-CN
+    #
+    # Operator override — demo / dev-cluster escape hatch
+    # (operator-acknowledged unsafe):
+    # tlsConfig:
+    #   insecureSkipVerify: true
+    # Optional relabeling for the scrape job.
+    # relabelings: []
+
+  # ----------------------------------------------------------------------
+  # Phase 4 DEPL-L2 closure (2026-05-14): PrometheusRule (alert rules)
+  #
+  # Operator opt-in. Requires Prometheus Operator CRDs (the
+  # `monitoring.coreos.com/v1` PrometheusRule kind) installed in
+  # cluster. Without those CRDs the rendered object is rejected by
+  # `kubectl apply` — keep enabled: false if you scrape with vanilla
+  # Prometheus + AlertManager rules ConfigMap instead.
+  #
+  # Four starter rules ship out of the box (see
+  # templates/prometheusrules.yaml for the full PromQL):
+  #
+  #   CertctlCertificateExpiringSoon — certs expiring within 30d
+  #   CertctlAgentOffline             — agent without heartbeat for >1h
+  #   CertctlJobFailureRateHigh       — job-failure rate over 5% (15m)
+  #   CertctlIssuanceFailures         — any issuance failures in last 15m
+  #
+  # All thresholds are operator-tunable via the `thresholds:` block
+  # below. The defaults are tuned for the demo dataset (15 certs / 1
+  # agent); production fleets with sustained renewal volume MAY want
+  # to raise the expiringCertificateCount + jobFailureRate thresholds
+  # to suppress steady-state noise.
+  prometheusRules:
+    enabled: false
+    # Evaluation interval for the rule group.
+    interval: 60s
+    # Additional labels applied to the PrometheusRule metadata.
+    # labels: {}
+    # Per-alert threshold / duration tunables.
+    thresholds:
+      # Fire when more than N certs are in the expiring-soon window.
+      expiringCertificateCount: 0
+      expiringCertificateFor: 5m
+      # Fire when more than N agents are offline (server - online).
+      offlineAgentCount: 0
+      offlineAgentFor: 1h
+      # Fire when job failure rate exceeds this fraction (15m window).
+      jobFailureRate: 0.05
+      jobFailureRateFor: 15m
+      # Fire when issuance failure rate exceeds this value (15m window).
+      issuanceFailureRate: 0
+      issuanceFailureFor: 15m
+
+# ==============================================================================
+# Backup CronJob (Phase 4 DEPL-H2 closure, 2026-05-14)
+# ==============================================================================
+# Operator opt-in. Default OFF. The CronJob runs `pg_dump --format=custom
+# --no-owner --no-acl --dbname=certctl` matching the canonical shape
+# documented in docs/operator/runbooks/postgres-backup.md (so manual
+# and automated dumps are byte-identical) and ships the result to a
+# sink chosen below.
+#
+# DO NOT enable this for managed Postgres deployments (AWS RDS / GCP
+# Cloud SQL / Azure DB) — those have built-in PITR backup that this
+# CronJob cannot match. For in-cluster Postgres only.
+backup:
+  enabled: false
+  # Cron expression (UTC). Default: 02:30 UTC daily.
+  schedule: "30 2 * * *"
+  # Sink: "pvc" (default — dump lands on a PersistentVolumeClaim) or
+  # "s3" (uploads via aws-cli — requires an image that bundles
+  # aws-cli, see backup.image below).
+  sink: pvc
+  # Container image. The default postgres:16-alpine has pg_dump but
+  # NOT aws-cli; for sink: s3 set this to an image that bundles both
+  # (e.g. ghcr.io/your-org/postgres-aws:16) or override the Job's
+  # command to install aws-cli at runtime.
+  image: postgres:16-alpine
+  imagePullPolicy: IfNotPresent
+  # PVC sink config — used when sink: pvc.
+  pvc:
+    # Name of an existing PersistentVolumeClaim mounted at /backups
+    # in the Job's pod. The PVC's storage class controls durability
+    # and snapshot retention. Operator creates this PVC out of band
+    # via their own storage policy.
+    claimName: certctl-backups
+  # S3 sink config — used when sink: s3.
+  s3:
+    # Target bucket (without s3:// prefix).
+    bucket: ""
+    # Object key prefix inside the bucket. Dumps land at
+    # s3://<bucket>/<prefix>/certctl-<TIMESTAMP>.dump.
+    prefix: certctl
+    # AWS region (sets AWS_DEFAULT_REGION). Optional if the image's
+    # AWS SDK can resolve the region another way (instance profile,
+    # IRSA, etc.).
+    region: ""
+    # Secret holding AWS credentials. The IAM principal needs
+    # s3:PutObject + s3:ListBucket on the target bucket only.
+    credentialsSecret:
+      name: certctl-backup-aws-creds
+      accessKeyIdKey: AWS_ACCESS_KEY_ID
+      secretAccessKeyKey: AWS_SECRET_ACCESS_KEY
+  # Job housekeeping.
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  startingDeadlineSeconds: 300
+  backoffLimit: 1
+  activeDeadlineSeconds: 3600
+  # Resource budget for the backup container. pg_dump is generally
+  # memory-light; ~250MB RSS for fleets up to 100K certs is typical.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  # Optional tolerations for the backup Job pod.
+  tolerations: []
+
+# ==============================================================================
+# Migrations via Helm hook (Phase 4 DEPL-M1 closure, 2026-05-14)
+# ==============================================================================
+# When viaHook: true, the chart deploys templates/migration-job.yaml as
+# a pre-install + pre-upgrade hook that runs `certctl-server
+# --migrate-only` (a hermetic schema-mutation pass) before the server
+# Deployment rolls.
+#
+# Set CERTCTL_MIGRATIONS_VIA_HOOK=true in the server Deployment env to
+# tell the server to skip its boot-time RunMigrations call (the hook
+# already did the work; running again at boot would race across
+# replicas during rollouts).
+#
+# Default OFF — when off, the server runs migrations at boot exactly
+# as it always has (Compose deploys keep this path).
+migrations:
+  viaHook: false
+  # Job housekeeping.
+  backoffLimit: 1
+  activeDeadlineSeconds: 600
+  # Resource budget for the migration Job pod. The migration pass is
+  # I/O-bound on Postgres; matches the server's resource budget by
+  # default. Override here if migrations on a large database need
+  # more headroom than the steady-state server.
+  # resources:
+  #   requests:
+  #     cpu: 100m
+  #     memory: 128Mi
+  #   limits:
+  #     cpu: 500m
+  #     memory: 512Mi
+
+# ==============================================================================
+# Network Policy (Bundle 3 closure / D11)
+# ==============================================================================
+# Default off so existing deploys don't suddenly lose network reach.
+# When enabled, restricts the server pod to:
+#   - Ingress: from in-namespace agent pods only.
+#   - Egress: kube-dns + bundled Postgres (if enabled).
+# Operators add CA / OIDC / SMTP egress via extraEgress.
+networkPolicy:
+  enabled: false
+  # Additional Ingress rules merged into the policy. Each entry is a
+  # raw networking.k8s.io/v1 NetworkPolicyIngressRule.
+  extraIngress: []
+  # Additional Egress rules merged into the policy. Common operator
+  # need: 443/TCP to an OIDC issuer, 443/TCP to a public CA endpoint,
+  # 25/TCP to an SMTP relay.
+  # Example:
+  # extraEgress:
+  #   - to:
+  #       - ipBlock:
+  #           cidr: 0.0.0.0/0
+  #           except:
+  #             - 10.0.0.0/8
+  #     ports:
+  #       - protocol: TCP
+  #         port: 443
+  extraEgress: []
+
+# ==============================================================================
+# Advanced Configuration
+# ==============================================================================
+
+# Node affinity for server pods
+nodeAffinity: {}
+
+# Pod affinity for server pods
+podAffinity: {}
+
+# Pod anti-affinity for server pods (for HA)
+podAntiAffinity: {}
+# Example:
+# podAntiAffinity:
+#   preferredDuringSchedulingIgnoredDuringExecution:
+#     - weight: 100
+#       podAffinityTerm:
+#         labelSelector:
+#           matchExpressions:
+#             - key: app.kubernetes.io/name
+#               operator: In
+#               values:
+#                 - certctl
+#         topologyKey: kubernetes.io/hostname
+
+# Custom labels for all resources
+customLabels: {}
+
+# Custom annotations for all resources
+customAnnotations: {}

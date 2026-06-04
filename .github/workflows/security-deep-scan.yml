@@ -1,0 +1,240 @@
+name: security-deep-scan
+
+# Bundle-7 / Audit D-001..D-007:
+# Slow / containerized scans on a daily schedule + manual dispatch.
+# Per-PR fast gates live in ci.yml; this workflow runs the heavyweight
+# tools that need docker, network egress to scanner registries, or
+# longer wall-clock budgets than a per-PR check tolerates.
+#
+# Scope:
+#   trivy image          container CVE + secret scan
+#   syft SBOM            CycloneDX SBOM artefact upload
+#   ZAP baseline         DAST baseline against a live deploy_test stack (D-004)
+#   nuclei               template-based vuln scan against the same stack
+#   schemathesis         OpenAPI fuzz against the running server
+#   testssl.sh           TLS configuration audit (D-005)
+#   race detector x10    full -count=10 race run on the entire test suite (D-002)
+#   gosec                Go security static analysis (slow first run)
+#   go-mutesting         mutation testing on crypto cluster (D-003)
+#   semgrep p/react-security  frontend XSS / dangerouslySetInnerHTML / target=_blank ruleset (D-007)
+#
+# Each step is best-effort — failures are uploaded as artefacts but do
+# NOT block the workflow. Triage happens via the Bundle-7 receipt
+# the project's comprehensive-audit tool-output directory.
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # daily 06:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  security-events: write   # SARIF upload to GitHub code scanning
+
+jobs:
+  deep-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+        with:
+          go-version: '1.25'
+
+      - name: Install Go-based tools
+        run: bash scripts/install-security-tools.sh
+        continue-on-error: true
+
+      # --- Static analysis (slow paths) ---
+
+      - name: gosec (G201/G202/G304/G108 subset — Phase 3 TEST-M2 hard gate)
+        # Phase 3 TEST-M2 closure (2026-05-13): gosec promoted from
+        # continue-on-error (advisory) to blocking on the 4 high-signal
+        # rule subset that targets real prod-bug classes:
+        #   G201 = SQL string formatting (SQL injection)
+        #   G202 = SQL string concatenation (SQL injection)
+        #   G304 = file-path traversal via tainted input
+        #   G108 = profiling endpoint exposed
+        # Other gosec rules (G1xx-G7xx broadly) remain in the SARIF
+        # report but don't gate the build — they have higher false-
+        # positive rates than these 4.
+        run: $(go env GOPATH)/bin/gosec -fmt sarif -out gosec.sarif -include=G201,G202,G304,G108 ./...
+
+      - name: osv-scanner (multi-ecosystem CVE — Phase 3 TEST-M2 hard gate)
+        # Phase 3 TEST-M2 closure (2026-05-13): osv-scanner promoted from
+        # advisory to blocking. Complements govulncheck (already blocking
+        # in ci.yml) by covering non-Go dependencies (npm under web/,
+        # any docker base image deps). Findings fail the build; the
+        # exact CVE list lands in osv-scanner.json as a receipt either way.
+        run: $(go env GOPATH)/bin/osv-scanner -r --format json --output osv-scanner.json .
+
+      # --- Race detector at -count=10 (D-002) ---
+
+      - name: go test -race -count=10 (full suite)
+        run: |
+          go test -race -count=10 -short ./... 2>&1 | tee go-test-race.txt
+        continue-on-error: true
+
+      # --- Coverage receipts for crypto cluster (H-005) ---
+
+      - name: go test -cover (crypto cluster)
+        run: |
+          go test -cover -covermode=atomic \
+            ./internal/crypto/... \
+            ./internal/pkcs7/... \
+            ./internal/connector/issuer/local/... \
+            2>&1 | tee go-test-cover.txt
+
+      # --- Mutation testing on crypto cluster (D-003) ---
+      #
+      # Operator runbook: docs/testing-strategy.md::Mutation testing.
+      # Tool: go-mutesting (https://github.com/zimmski/go-mutesting). Each
+      # package is mutated independently; the per-package summary line
+      # (`The mutation score is X.YZ`) is grep-extracted into the receipt.
+      # Acceptance threshold: ≥80% kill ratio per package; surviving
+      # mutants get triaged in the project's comprehensive-audit notes/
+      # d003-mutation-results.md (per-mutant action item or
+      # equivalent-mutation justification).
+
+      - name: Install go-mutesting
+        run: go install github.com/zimmski/go-mutesting/cmd/go-mutesting@latest
+        continue-on-error: true
+
+      - name: go-mutesting (crypto cluster — Phase 3 TEST-M1 hard gate at 55%)
+        # Phase 3 TEST-M1 closure (2026-05-13): go-mutesting promoted
+        # from advisory (continue-on-error + per-package `|| true`) to
+        # blocking with an explicit mutation-score floor of 55%.
+        # Per-package summary lines emit `The mutation score is X.YZ`;
+        # the awk filter extracts each, and the post-loop check fails
+        # the step if any package drops below 0.55.
+        #
+        # Floor rationale: 55% is the starter ratio that catches major
+        # regressions without rejecting the audit's "this is OK" steady
+        # state. Raise quarterly as the test suite hardens; the floor
+        # change ships in the same commit that adds the strengthening
+        # tests so the ratchet is documented.
+        run: |
+          set -e
+          : > go-mutesting.txt
+          for pkg in ./internal/crypto/... ./internal/pkcs7/... ./internal/connector/issuer/local/...; do
+            echo "=== $pkg ===" | tee -a go-mutesting.txt
+            $(go env GOPATH)/bin/go-mutesting "$pkg" 2>&1 | tee -a go-mutesting.txt
+          done
+          # Extract every "The mutation score is X.YZ" line; fail on any
+          # score below 0.55. The check works against floats via awk so
+          # 0.55 is the literal threshold (not a percentage).
+          floor=0.55
+          fail=0
+          while IFS= read -r score; do
+            ok=$(awk -v s="$score" -v f="$floor" 'BEGIN{print (s>=f) ? 1 : 0}')
+            if [ "$ok" -ne 1 ]; then
+              echo "::error::mutation score $score below floor $floor"
+              fail=1
+            fi
+          done < <(grep -oE "The mutation score is [0-9.]+" go-mutesting.txt | awk '{print $NF}')
+          exit $fail
+
+      # --- Container + supply chain (D-001 partial, D-006 partial) ---
+
+      - name: Build certctl image
+        run: docker build -t certctl:deep-scan .
+        continue-on-error: true
+
+      - name: trivy image scan (HIGH+CRITICAL — Phase 3 TEST-M2 hard gate)
+        # Phase 3 TEST-M2 closure (2026-05-13): trivy promoted from
+        # advisory to blocking. --severity filter keeps the gate
+        # noise-free (LOW + MEDIUM findings stay in the JSON receipt
+        # but don't fail the build); --exit-code 1 makes HIGH+CRITICAL
+        # findings the actual gate. Trivy is the third hard deep-scan
+        # gate (alongside gosec + osv-scanner); ZAP / schemathesis /
+        # nuclei / testssl stay advisory because their false-positive
+        # rates on https://localhost:8443-targeted DAST runs are high.
+        run: |
+          docker run --rm -v "$PWD":/src aquasec/trivy:latest image \
+            --format json --output /src/trivy.json \
+            --severity HIGH,CRITICAL \
+            --exit-code 1 \
+            certctl:deep-scan
+
+      - name: syft SBOM
+        run: |
+          docker run --rm -v "$PWD":/src anchore/syft:latest dir:/src \
+            -o cyclonedx-json > syft.cyclonedx.json || true
+        continue-on-error: true
+
+      # --- DAST against a live stack (D-004) ---
+
+      - name: docker compose up (test stack)
+        run: |
+          docker compose -f deploy/docker-compose.yml up -d
+          sleep 20
+        continue-on-error: true
+
+      - name: ZAP baseline
+        uses: zaproxy/action-baseline@1e1871e84428617b969d4a1f981a8255630d54b0  # v0.10.0
+        with:
+          target: 'https://localhost:8443'
+        continue-on-error: true
+
+      - name: schemathesis (OpenAPI fuzz)
+        run: |
+          pip install schemathesis
+          schemathesis run --base-url https://localhost:8443 \
+            --hypothesis-max-examples=50 api/openapi.yaml || true
+        continue-on-error: true
+
+      - name: nuclei
+        run: |
+          docker run --rm --network host projectdiscovery/nuclei:latest \
+            -u https://localhost:8443 -j -o nuclei.json || true
+        continue-on-error: true
+
+      # --- TLS audit (D-005) ---
+
+      - name: testssl.sh
+        run: |
+          docker run --rm -v "$PWD":/data drwetter/testssl.sh:latest \
+            --jsonfile /data/testssl.json https://localhost:8443 || true
+        continue-on-error: true
+
+      - name: docker compose down
+        run: docker compose -f deploy/docker-compose.yml down || true
+        if: always()
+
+      # --- Frontend XSS / unsafe-link ruleset (D-007) ---
+      #
+      # Operator runbook: docs/testing-strategy.md::Frontend semgrep.
+      # Bundle 8 already verified `dangerouslySetInnerHTML` count at
+      # zero and the `target="_blank"` rel-noopener pin via grep
+      # guards in ci.yml — semgrep p/react-security adds defence in
+      # depth (it catches escape patterns the grep guards don't see,
+      # e.g., href={user_input}, eval, document.write).
+
+      - name: semgrep p/react-security (frontend)
+        run: |
+          docker run --rm -v "$PWD":/src returntocorp/semgrep:latest \
+            semgrep --config=p/react-security --json /src/web/src \
+            > semgrep-react.json 2>semgrep-react.stderr || true
+        continue-on-error: true
+
+      # --- Upload everything as artefacts ---
+
+      - name: Upload deep-scan receipts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: security-deep-scan-${{ github.run_id }}
+          path: |
+            gosec.sarif
+            osv-scanner.json
+            go-test-race.txt
+            go-test-cover.txt
+            go-mutesting.txt
+            trivy.json
+            syft.cyclonedx.json
+            nuclei.json
+            testssl.json
+            semgrep-react.json
+            semgrep-react.stderr
+          retention-days: 30

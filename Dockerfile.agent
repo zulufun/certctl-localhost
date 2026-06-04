@@ -1,0 +1,81 @@
+# Multi-stage build for certctl agent
+#
+# Bundle A / Audit H-001 (CWE-829): every FROM line is pinned to an
+# immutable digest. See Dockerfile (server) for the bump-procedure
+# operator runbook; the pins here MUST be bumped in the same pass.
+
+# Stage 1: Build
+FROM golang:1.25.10-alpine@sha256:8d22e29d960bc50cd025d93d5b7c7d220b1ee9aa7a239b3c8f55a57e987e8d45 AS builder
+
+# Proxy propagation (M-4, Issue #9) — defaulted to empty so un-proxied builds
+# behave identically to the pre-fix tree. When `HTTP_PROXY`/`HTTPS_PROXY`/
+# `NO_PROXY` are forwarded via `docker build --build-arg` (or compose
+# `build.args`), they are re-exported as ENV with both upper- and lower-case
+# names because apk and curl read the lowercase variants while Go reads the
+# uppercase ones.
+ARG HTTP_PROXY=
+ARG HTTPS_PROXY=
+ARG NO_PROXY=
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=${NO_PROXY} \
+    http_proxy=${HTTP_PROXY} \
+    https_proxy=${HTTPS_PROXY} \
+    no_proxy=${NO_PROXY}
+
+RUN apk add --no-cache git ca-certificates
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+ARG TARGETARCH=amd64
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
+    -ldflags="-w -s" \
+    -o bin/agent \
+    ./cmd/agent
+
+# Stage 2: Runtime
+FROM alpine:3.19@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1
+
+# U-2: `procps` ships pgrep, which the HEALTHCHECK below uses to verify the
+# agent process is alive. Pre-U-2 the deploy/docker-compose.yml agent
+# HEALTHCHECK called `pgrep -f certctl-agent` against this image but
+# pgrep wasn't installed — the compose probe was a latent always-fail.
+# Adding procps here fixes both the new image-level HEALTHCHECK and the
+# pre-existing compose override. Adds ~250KB to the image; acceptable for
+# observability parity with the server image.
+RUN apk add --no-cache ca-certificates curl procps
+
+RUN addgroup -g 1000 certctl && \
+    adduser -D -u 1000 -G certctl certctl
+
+WORKDIR /app
+
+COPY --from=builder /app/bin/agent .
+
+# Create key storage directory for agent-side keygen
+RUN mkdir -p /var/lib/certctl/keys && \
+    chown -R certctl:certctl /app /var/lib/certctl
+
+USER certctl
+
+# Image-level HEALTHCHECK for bare `docker run` / Docker Swarm / Nomad / ECS.
+#
+# U-2 (P1, cat-u-healthcheck_protocol_mismatch — adjacent fix): the agent
+# has no HTTP listener (it polls the server via outbound HTTPS), so a
+# process-presence check is the correct primitive. Pre-U-2 the agent image
+# shipped with no HEALTHCHECK at all, so bare-`docker run` operators got
+# zero health signal and orchestrators that key off Docker's HEALTHCHECK
+# (Swarm, Nomad, ECS) saw the container reported as `none`. The compose
+# override at deploy/docker-compose.yml:173 used the same `pgrep -f
+# certctl-agent` shape; we mirror it here so the published image has
+# parity with the compose stack and the override on docker-compose.yml
+# becomes redundant-but-correct rather than load-bearing.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD pgrep -f certctl-agent > /dev/null || exit 1
+
+ENTRYPOINT ["/app/agent"]

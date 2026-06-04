@@ -1,0 +1,81 @@
+{{- /*
+Bundle 3 closure (D5 + OPS-M1 docs): Prometheus Operator ServiceMonitor.
+
+Pre-Bundle-3 the chart had `monitoring.serviceMonitor.enabled` in
+values.yaml but no template consumed it — toggling it on rendered
+nothing. Audit D5 closed.
+
+The endpoint scrapes /api/v1/metrics/prometheus which the certctl
+server already exposes in Prometheus exposition format (see
+internal/api/handler/metrics.go::GetPrometheusMetrics). Note: the
+endpoint is rbac-gated on `metrics.read`, so the ServiceMonitor needs
+a bearer token. Operators with Prometheus Operator MUST set
+`monitoring.serviceMonitor.bearerTokenSecret` pointing at a Secret
+that holds an API key with the `metrics.read` permission. Without
+that, scrapes return 401.
+
+OPS-M1 caveat: the current /metrics/prometheus handler is a hand-rolled
+exposition-format emitter, not prometheus/client_golang-instrumented
+code. Histograms, exemplars, and target labels are limited to what the
+handler computes statically. Migration to client_golang tracked in
+WORKSPACE-ROADMAP.md.
+*/ -}}
+{{- if and .Values.monitoring.enabled .Values.monitoring.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "certctl.fullname" . }}-server
+  labels:
+    {{- include "certctl.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+    {{- with .Values.monitoring.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "certctl.serverSelectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: https
+      scheme: https
+      path: /api/v1/metrics/prometheus
+      interval: {{ .Values.monitoring.serviceMonitor.interval | default "30s" }}
+      scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout | default "10s" }}
+      tlsConfig:
+        {{- /*
+        Acquisition-audit DEPL-004 closure (Sprint 6 ACQ, 2026-05-16).
+        Pre-Sprint-6 the default was an implicit insecureSkipVerify
+        true via the template falling through the else branch.
+        Post-Sprint-6 values.yaml ships a real-verify default
+        (caFile + serverName matching the chart existingSecret /
+        cert-manager-emitted Secret at /etc/prometheus/secrets/
+        certctl-ca/), so the truthy if-branch below always fires for
+        the default install. Operators who want skipVerify back must
+        override with tlsConfig insecureSkipVerify true explicitly.
+        Operators who blank tlsConfig entirely hit the else-branch
+        below and trip the Helm fail directive at chart-render time;
+        there is no way to inherit the pre-Sprint-6 implicit-skip
+        behavior silently. See docs/operator/helm-deployment.md for
+        the narrative explanation, including the lesson that comment
+        text referencing Helm template-action delimiters must live
+        in Helm-style comment blocks (this block), never in YAML
+        hash-comment blocks — the Helm lexer scans for action
+        delimiters everywhere in the source text, ignoring YAML
+        comment markers, so descriptive references to actions inside
+        YAML hash-comments are reinterpreted as template actions
+        and abort the entire chart render.
+        */ -}}
+        {{- if .Values.monitoring.serviceMonitor.tlsConfig }}
+        {{- toYaml .Values.monitoring.serviceMonitor.tlsConfig | nindent 8 }}
+        {{- else }}
+        {{- fail "monitoring.serviceMonitor.tlsConfig was explicitly blanked but monitoring.serviceMonitor.enabled=true (Sprint 6 ACQ DEPL-004 closure, 2026-05-16). The values.yaml default ships caFile=/etc/prometheus/secrets/certctl-ca/ca.crt + serverName=certctl-server which matches the existingSecret mount pattern. If your Prometheus pod mounts the CA bundle at a different path, override caFile rather than blanking the block. If you genuinely need skipVerify, set tlsConfig insecureSkipVerify=true explicitly — never blank. See docs/operator/helm-deployment.md for the upgrade-path note." }}
+        {{- end }}
+      {{- with .Values.monitoring.serviceMonitor.bearerTokenSecret }}
+      bearerTokenSecret:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.monitoring.serviceMonitor.relabelings }}
+      relabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

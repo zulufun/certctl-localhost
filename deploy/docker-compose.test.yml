@@ -1,0 +1,770 @@
+# =============================================================================
+# certctl Testing Environment — Docker Compose
+# =============================================================================
+#
+# Spins up the full certctl platform with real CA backends for manual QA:
+#
+#   0. certctl-tls-init     — one-shot init container; writes self-signed
+#                             server.crt/.key/ca.crt into ./test/certs (bind
+#                             mount, not a named volume — host-readable for
+#                             the Go integration test binary)
+#   1. PostgreSQL 16        — database (clean, no demo data)
+#   2. certctl-server       — control plane API + web dashboard on :8443 (HTTPS)
+#   3. certctl-agent        — polls for work, deploys certs to NGINX
+#   4. step-ca              — private CA (JWK provisioner, auto-bootstraps)
+#   5. Pebble               — ACME test server (simulates Let's Encrypt)
+#   6. pebble-challtestsrv  — DNS/HTTP challenge test server for Pebble
+#   7. NGINX                — TLS target server on :8080 (HTTP) / :8444 (HTTPS)
+#
+# Usage:
+#   cd deploy
+#   docker compose -f docker-compose.test.yml up --build
+#
+# Dashboard:  https://localhost:8443   (self-signed — use --cacert test/certs/ca.crt)
+# API key:    test-key-2026
+# NGINX:      https://localhost:8444 (self-signed placeholder until cert deployed)
+#
+# Integration tests: `go test -tags integration ./deploy/test/...` picks up
+# the CA bundle at ./test/certs/ca.crt automatically via CERTCTL_TEST_CA_BUNDLE.
+#
+# See docs/test-env.md for the full walkthrough.
+# =============================================================================
+
+name: certctl-test
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # HTTPS-Everywhere Phase 6 — self-signed TLS bootstrap for the test harness.
+  # ---------------------------------------------------------------------------
+  # Mirrors the production `certctl-tls-init` (see docker-compose.yml §10-43)
+  # but writes into a *host bind mount* (./test/certs) instead of a named
+  # volume. The named-volume approach works fine inside Docker but hides the
+  # CA bundle from the Go integration test binary that runs on the host; the
+  # bind mount exposes /etc/certctl/tls/ca.crt at deploy/test/certs/ca.crt
+  # so `newTestClient()` can load it into an x509.CertPool and validate the
+  # self-signed server cert. Test-only divergence, explicitly documented.
+  #
+  # The generated cert has SAN=DNS:certctl-server,DNS:localhost,IP:127.0.0.1
+  # so both in-cluster traffic (agent → certctl-server:8443) and host traffic
+  # (go test → localhost:8443) validate cleanly. Destroy via
+  # `docker compose -f docker-compose.test.yml down -v` + `rm -rf test/certs`
+  # to force regeneration. Keys written 0600, certs 0644, owned 1000:1000
+  # (the UID the server binary runs as inside its container per Dockerfile:64).
+  certctl-tls-init:
+    image: alpine/openssl:latest
+    container_name: certctl-test-tls-init
+    restart: "no"
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        set -eu
+        CERT=/etc/certctl/tls/server.crt
+        KEY=/etc/certctl/tls/server.key
+        CA=/etc/certctl/tls/ca.crt
+        if [ -f "$$CERT" ] && [ -f "$$KEY" ] && [ -f "$$CA" ]; then
+          echo "TLS cert already present at $$CERT — skipping generation"
+        else
+          mkdir -p /etc/certctl/tls
+          openssl req -x509 -newkey ec \
+            -pkeyopt ec_paramgen_curve:P-256 \
+            -nodes \
+            -keyout "$$KEY" \
+            -out "$$CERT" \
+            -days 3650 \
+            -subj "/CN=certctl-server" \
+            -addext "subjectAltName=DNS:certctl-server,DNS:localhost,IP:127.0.0.1,IP:::1"
+          cp "$$CERT" "$$CA"
+          echo "Generated self-signed TLS cert for certctl-test-server (ECDSA-P256/SHA-256, 3650d, CN=certctl-server)"
+        fi
+        # The test server container runs as root (see `user: "0:0"` below)
+        # because setup-trust.sh needs to update the system trust store, so
+        # the perms here are really about host-side readability — 0644 on
+        # the CA/cert lets `go test` on the host read the bundle without a
+        # chown dance.
+        chown 1000:1000 "$$CERT" "$$KEY" "$$CA" || true
+        chmod 0644 "$$CERT" "$$CA"
+        chmod 0600 "$$KEY"
+    volumes:
+      - ./test/certs:/etc/certctl/tls
+    networks:
+      certctl-test:
+        ipv4_address: 10.30.50.9
+
+  # ---------------------------------------------------------------------------
+  # Database
+  # ---------------------------------------------------------------------------
+  #
+  # U-3 (P1, cat-u-seed_initdb_schema_drift, GitHub #10): the test stack used
+  # to mount a hand-curated subset of migrations + seed.sql + a never-checked-in
+  # seed_test.sql into postgres `/docker-entrypoint-initdb.d/`. Same hazard as
+  # the production compose — initdb crashed any time a new migration shipped
+  # that the seed depended on without the mount list being updated. Post-U-3
+  # the schema is built EXCLUSIVELY by the server at startup via
+  # internal/repository/postgres.RunMigrations + RunSeed. Postgres comes up
+  # empty and the server lands the full ladder + baseline seed in one shot.
+  # `start_period: 30s` matches the production compose and shields slow CI
+  # runners from healthcheck flap during initdb.
+  postgres:
+    image: postgres:16-alpine
+    container_name: certctl-test-postgres
+    environment:
+      POSTGRES_DB: certctl
+      POSTGRES_USER: certctl
+      POSTGRES_PASSWORD: testpass
+    volumes:
+      - test_postgres_data:/var/lib/postgresql/data
+    networks:
+      certctl-test:
+        ipv4_address: 10.30.50.2
+    # Acquisition-audit SEC-014 closure (Sprint 2, 2026-05-16).
+    # Loopback-only host-port bind — the integration-test runner on
+    # the host needs reachability, no other interface does.
+    ports:
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U certctl -d certctl"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Pebble — ACME test server (simulates Let's Encrypt)
+  # ---------------------------------------------------------------------------
+  # Pebble is the official ACME test server from Let's Encrypt (RFC 8555).
+  # It validates challenges via the companion challtestsrv.
+  # Root CA cert available at https://pebble:15000/roots/0 (management API).
+  pebble-challtestsrv:
+    image: ghcr.io/letsencrypt/pebble-challtestsrv:latest
+    container_name: certctl-test-challtestsrv
+    # ENTRYPOINT is /app (the binary). command: provides only the FLAGS.
+    # Matches the official Pebble docker-compose format.
+    # -doh "" disables DoH (default :8443 would conflict with certctl server).
+    # defaultIPv4 must point to the certctl-server (10.30.50.6) because that's where
+    # the ACME HTTP-01 challenge server runs (port 80 inside the container).
+    # Pebble resolves domains via challtestsrv, then connects to this IP to validate.
+    command: -defaultIPv4 10.30.50.6 -defaultIPv6 "" -doh ""
+    networks:
+      certctl-test:
+        ipv4_address: 10.30.50.3
+    restart: unless-stopped
+
+  pebble:
+    image: ghcr.io/letsencrypt/pebble:latest
+    container_name: certctl-test-pebble
+    depends_on:
+      - pebble-challtestsrv
+    environment:
+      PEBBLE_VA_NOSLEEP: 1
+      PEBBLE_VA_ALWAYS_VALID: 0
+    # ENTRYPOINT is /app (the binary). command: provides only the FLAGS.
+    command:
+      - -config
+      - /test/config/pebble-config.json
+      - -dnsserver
+      - "10.30.50.3:8053"
+      - -strict
+    volumes:
+      - ./test/pebble-config.json:/test/config/pebble-config.json:ro
+    networks:
+      certctl-test:
+        ipv4_address: 10.30.50.4
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # step-ca — Private CA (Smallstep)
+  # ---------------------------------------------------------------------------
+  # Auto-bootstraps on first run: generates root CA + JWK provisioner "admin".
+  # Root cert: /home/step/certs/root_ca.crt (inside stepca_data volume)
+  # Provisioner key: /home/step/secrets/provisioner_key (encrypted JWK)
+  step-ca:
+    image: smallstep/step-ca:latest
+    container_name: certctl-test-stepca
+    environment:
+      DOCKER_STEPCA_INIT_NAME: "certctl-test-ca"
+      DOCKER_STEPCA_INIT_DNS_NAMES: "step-ca,localhost"
+      DOCKER_STEPCA_INIT_PROVISIONER_NAME: "admin"
+      DOCKER_STEPCA_INIT_PASSWORD: "password123"
+      DOCKER_STEPCA_INIT_ADDRESS: ":9000"
+    volumes:
+      - stepca_data:/home/step
+    networks:
+      certctl-test:
+        ipv4_address: 10.30.50.5
+    healthcheck:
+      test: ["CMD", "curl", "-fk", "https://localhost:9000/health"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 10
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # certctl Server (Control Plane)
+  # ---------------------------------------------------------------------------
+  # Connects to PostgreSQL, Pebble (ACME), step-ca, and Local CA.
+  #
+  # TLS trust problem: Pebble and step-ca use self-signed root CAs that
+  # aren't in Alpine's trust store. The ACME and step-ca connectors use
+  # Go's default http.Client (no InsecureSkipVerify), so they need the
+  # CA certs in the system trust store.
+  #
+  # Solution: setup-trust.sh runs as root, fetches Pebble CA from its
+  # management API, copies step-ca root cert from the shared volume,
+  # runs update-ca-certificates, then execs the server binary.
+  certctl-server:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      # Proxy propagation (M-4, Issue #9) — forwards host shell's proxy env
+      # vars into the Docker build so the Node frontend stage and Go module
+      # download can reach the public registries behind corporate proxies.
+      # Defaults to empty; omit the variables from the host environment for
+      # un-proxied builds and the behaviour is byte-identical to the pre-fix
+      # tree.
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
+    container_name: certctl-test-server
+    depends_on:
+      postgres:
+        condition: service_healthy
+      pebble:
+        condition: service_started
+      step-ca:
+        condition: service_healthy
+      # HTTPS-Everywhere Phase 6: block server boot until the init container
+      # has written server.crt / server.key / ca.crt into ./test/certs. The
+      # init container runs once and exits 0; service_completed_successfully
+      # makes that a gating dependency rather than a liveness one.
+      certctl-tls-init:
+        condition: service_completed_successfully
+    # Run as root so update-ca-certificates can write to /etc/ssl/certs.
+    # Container isolation provides the security boundary.
+    user: "0:0"
+    entrypoint: ["/bin/sh", "/app/setup-trust.sh"]
+    environment:
+      # Database
+      CERTCTL_DATABASE_URL: postgres://certctl:testpass@postgres:5432/certctl?sslmode=disable
+      CERTCTL_TEST_SEED: "true"
+
+      # Server
+      CERTCTL_SERVER_HOST: 0.0.0.0
+      CERTCTL_SERVER_PORT: 8443
+      # HTTPS-Everywhere Phase 6: point the server at the init-container-generated
+      # cert/key pair (bind-mounted from ./test/certs). Same paths as production
+      # compose so the server binary code path is identical; only the host-side
+      # storage differs (bind mount vs named volume — see §certctl-tls-init block).
+      CERTCTL_SERVER_TLS_CERT_PATH: /etc/certctl/tls/server.crt
+      CERTCTL_SERVER_TLS_KEY_PATH: /etc/certctl/tls/server.key
+      CERTCTL_LOG_LEVEL: debug
+
+      # Auth — API key required (production-like)
+      CERTCTL_AUTH_TYPE: api-key
+      CERTCTL_AUTH_SECRET: test-key-2026
+
+      # Phase 2 SEC-H1 + Sprint 5 RED-003 closure (2026-05-16): the
+      # AgentBootstrapTokenDenyEmpty fail-closed guard refuses to start
+      # the server when CERTCTL_AGENT_BOOTSTRAP_TOKEN is empty (the
+      # default DENY_EMPTY=true flipped on Sprint 5). Demo stacks
+      # bypass the guard via CERTCTL_DEMO_MODE_ACK=true, but this is
+      # the e2e TEST stack (production-like auth posture), not a demo
+      # stack — set a deterministic placeholder token so the server
+      # boots and the vendor-edge integration tests can run. Clearly
+      # test-only; do NOT copy to production. Operators set this from
+      # `openssl rand -base64 32` per docs/operator/security.md.
+      CERTCTL_AGENT_BOOTSTRAP_TOKEN: test-agent-bootstrap-token-deterministic-fixture
+
+      # Key generation — agent-side (production-like)
+      CERTCTL_KEYGEN_MODE: agent
+
+      # Local CA issuer (iss-local) — self-signed mode (no CA cert/key paths)
+      # This is the simplest issuer, always available.
+
+      # ACME issuer (iss-acme-staging) — pointed at Pebble
+      CERTCTL_ACME_DIRECTORY_URL: https://pebble:14000/dir
+      CERTCTL_ACME_EMAIL: test@certctl.dev
+      CERTCTL_ACME_CHALLENGE_TYPE: http-01
+      CERTCTL_ACME_INSECURE: "true"
+      # Phase 2 SEC-M4 (2026-05-13): CERTCTL_ACME_INSECURE=true requires
+      # the paired CERTCTL_ACME_INSECURE_ACK=true; without the ACK the
+      # server's Config.Validate() refuses to start. This integration
+      # stack uses Pebble's self-signed ACME directory, so disabling
+      # TLS verification is correct — but the ACK env var has to be
+      # set explicitly so the test posture matches what production
+      # operators are blocked from doing accidentally.
+      CERTCTL_ACME_INSECURE_ACK: "true"
+
+      # step-ca issuer (iss-stepca)
+      CERTCTL_STEPCA_URL: https://step-ca:9000
+      CERTCTL_STEPCA_ROOT_CERT: /stepca-data/certs/root_ca.crt
+      CERTCTL_STEPCA_PROVISIONER: admin
+      CERTCTL_STEPCA_PASSWORD: password123
+      CERTCTL_STEPCA_KEY_PATH: /stepca-data/secrets/provisioner_key
+
+      # EST server (RFC 7030) — uses Local CA by default
+      CERTCTL_EST_ENABLED: "true"
+      CERTCTL_EST_ISSUER_ID: iss-local
+
+      # SCEP intentionally NOT configured in this stack.
+      #
+      # The 2026-04-29 master bundle Phase I added an `e2eintune` SCEP
+      # profile to this compose file with the intent that
+      # deploy/test/scep_intune_e2e_test.go would exercise it. That
+      # integration test exists (//go:build integration) but no CI job
+      # actually selects it — ci.yml's deploy-vendor-e2e job runs only
+      # `-run 'VendorEdge_'` (line 379), and no other job ever invokes
+      # `go test -tags integration` with a SCEP selector.
+      #
+      # The result was dead config: SCEP_ENABLED=true triggered the
+      # per-profile validator chain at server boot, but the supporting
+      # fixtures (ra.crt + ra.key + intune_trust_anchor.pem) were never
+      # committed to deploy/test/fixtures/ — only the README documenting
+      # how to regenerate them. Pre-Phase-5 (ci-pipeline-cleanup matrix
+      # collapse) the test stack didn't fully boot the certctl-server in
+      # CI, so the gap was hidden. Once the matrix collapsed and the
+      # collapsed deploy-vendor-e2e job started actually booting the
+      # server, the fail-loud gate at config.go:2069 (CWE-306, empty
+      # CHALLENGE_PASSWORD) fired and blocked CI.
+      #
+      # CERTCTL_SCEP_ENABLED is unset → default false → the validator
+      # skips the entire SCEP block. Coherence guard at
+      # scripts/ci-guards/test-compose-scep-coherence.sh refuses any
+      # future edit that re-enables SCEP without ALSO (a) adding a CI
+      # job that runs the SCEP integration test and (b) committing the
+      # required fixtures. The README at deploy/test/fixtures/README.md
+      # keeps the regen recipe so the eventual SCEP CI job lands cleanly.
+
+      # Dynamic issuer/target config encryption (M34/M35).
+      #
+      # MUST be ≥ 32 bytes. The H-1 closure (commit 6cb4414, "feat(security):
+      # encryption-key validation") added internal/config/config.go's
+      # minEncryptionKeyLength = 32 byte floor; values shorter than that are
+      # rejected at server boot with `Failed to load configuration:
+      # CERTCTL_CONFIG_ENCRYPTION_KEY too short`. The previous test value
+      # `test-encryption-key-32chars!!` was 29 bytes (the name claimed 32 but
+      # the author miscounted — 4+1+10+1+3+1+2+5+2 = 29). Pre-H-1 the
+      # validator accepted any non-empty string, so the gap was silent. Once
+      # the test stack actually boots the certctl-server (which the
+      # ci-pipeline-cleanup Phase 5 matrix collapse forced for the first
+      # time), the server now hard-fails at startup and the deploy-vendor-e2e
+      # job's `dependency failed to start: container certctl-test-server
+      # is unhealthy` error fires.
+      #
+      # The replacement below is 49 bytes — 17 bytes of safety margin over
+      # the floor so a future tightening (32 → 33+) does not break this
+      # fixture. It is clearly test-only / deterministic; do NOT copy this
+      # to production. Operators set CERTCTL_CONFIG_ENCRYPTION_KEY from
+      # `openssl rand -base64 32` per the README.
+      CERTCTL_CONFIG_ENCRYPTION_KEY: test-encryption-key-deterministic-32-byte-fixture
+
+      # Network scanning
+      CERTCTL_NETWORK_SCAN_ENABLED: "true"
+
+      # Post-deployment TLS verification
+      CERTCTL_VERIFY_DEPLOYMENT: "true"
+      CERTCTL_VERIFY_TIMEOUT: "10s"
+      CERTCTL_VERIFY_DELAY: "3s"
+    ports:
+      - "9443:8443"
+    volumes:
+      - ./test/setup-trust.sh:/app/setup-trust.sh:ro
+      # step-ca data volume (root cert at /certs/root_ca.crt, key at /secrets/provisioner_key)
+      - stepca_data:/stepca-data:ro
+      # HTTPS-Everywhere Phase 6: read-only bind mount of the init-generated
+      # TLS material. The init container writes here; server reads here; the
+      # agent mounts the same host path at the same container path (see below)
+      # so /etc/certctl/tls/ca.crt resolves to the *same* bytes on both sides.
+      - ./test/certs:/etc/certctl/tls:ro
+      # SCEP fixtures volume mount removed alongside the SCEP env vars
+      # above. When a CI job that runs scep_intune_e2e_test.go is added,
+      # restore both this mount AND the env vars together — the coherence
+      # guard at scripts/ci-guards/test-compose-scep-coherence.sh
+      # enforces that they move as a unit.
+    networks:
+      certctl-test:
+        ipv4_address: 10.30.50.6
+    healthcheck:
+      # HTTPS-Everywhere Phase 6: healthcheck now speaks TLS with --cacert to
+      # verify the self-signed server cert against the init-generated bundle.
+      # /health requires auth when CERTCTL_AUTH_TYPE=api-key, so include the
+      # Bearer token. curl exits non-zero on both TLS handshake failure and
+      # non-2xx status — either failure keeps depends_on: {condition:
+      # service_healthy} from unblocking the agent, which is what we want.
+      test: ["CMD", "curl", "--cacert", "/etc/certctl/tls/ca.crt", "-f", "-H", "Authorization: Bearer test-key-2026", "https://localhost:8443/health"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 10
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # NGINX — TLS Target Server
+  # ---------------------------------------------------------------------------
+  # The agent deploys certificates here via the shared nginx_certs volume.
+  # nginx-entrypoint.sh generates a self-signed placeholder cert so NGINX
+  # can boot before the agent deploys a real cert.
+  #
+  # Ports: 8080 (HTTP) / 8444 (HTTPS) — offset to avoid conflict with server.
+  nginx:
+    image: nginx:alpine
+    container_name: certctl-test-nginx
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    volumes:
+      - ./test/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./test/nginx-entrypoint.sh:/entrypoint.sh:ro
+      - nginx_certs:/etc/nginx/certs
+    ports:
+      - "8080:80"
+      - "8444:443"
+    networks:
+      certctl-test:
+        ipv4_address: 10.30.50.7
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fk https://localhost/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 5
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # certctl Agent
+  # ---------------------------------------------------------------------------
+  # Polls the server for work, generates ECDSA P-256 keys locally,
+  # deploys certs to NGINX via the shared volume, and discovers existing
+  # certs in the NGINX cert directory.
+  certctl-agent:
+    build:
+      context: ..
+      dockerfile: Dockerfile.agent
+      # Proxy propagation (M-4, Issue #9) — forwards host shell's proxy env
+      # vars into the Docker build so the Go module download stage can reach
+      # the public Go module proxy behind corporate proxies. Defaults to
+      # empty; omit the variables from the host environment for un-proxied
+      # builds and the behaviour is byte-identical to the pre-fix tree.
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
+    container_name: certctl-test-agent
+    depends_on:
+      certctl-server:
+        condition: service_healthy
+    environment:
+      # HTTPS-Everywhere Phase 6: agent dials the server over TLS and validates
+      # the self-signed cert against the CA bundle pinned by
+      # CERTCTL_SERVER_CA_BUNDLE_PATH. Same env vars + container paths as
+      # production compose so the agent binary code path (loadCABundle →
+      # x509.CertPool → *tls.Config{RootCAs, MinVersion: TLS13}) is identical.
+      CERTCTL_SERVER_URL: https://certctl-server:8443
+      CERTCTL_SERVER_CA_BUNDLE_PATH: /etc/certctl/tls/ca.crt
+      CERTCTL_API_KEY: test-key-2026
+      CERTCTL_AGENT_NAME: test-agent-01
+      CERTCTL_AGENT_ID: agent-test-01
+      CERTCTL_KEYGEN_MODE: agent
+      CERTCTL_LOG_LEVEL: debug
+      CERTCTL_DISCOVERY_DIRS: /nginx-certs
+    volumes:
+      - agent_keys:/var/lib/certctl/keys
+      - nginx_certs:/nginx-certs
+      # HTTPS-Everywhere Phase 6: same bind mount as the server, same path,
+      # so /etc/certctl/tls/ca.crt resolves to the identical bytes. This is
+      # the only way the CN=certctl-server cert validates on the agent side.
+      - ./test/certs:/etc/certctl/tls:ro
+    networks:
+      certctl-test:
+        ipv4_address: 10.30.50.8
+    restart: unless-stopped
+
+  # EST RFC 7030 hardening master bundle Phase 10.1 — libest sidecar.
+  #
+  # Cisco's libest reference RFC 7030 client. The integration test
+  # (deploy/test/est_e2e_test.go, build tag `integration`) docker-exec's
+  # into this container to drive estclient against the live certctl
+  # server. The container stays alive via `sleep infinity` so the test
+  # can do many serial exec calls without paying container-startup cost.
+  #
+  # Profile-gated (`profiles: [est-e2e]`) so the routine `docker compose
+  # up` for non-EST integration runs doesn't pay the libest build cost.
+  # Operator opts in via `docker compose --profile est-e2e up`. CI's
+  # est-e2e job runs:
+  #     docker compose --profile est-e2e build libest-client
+  #     docker compose --profile est-e2e up -d
+  #     INTEGRATION=1 go test -tags integration -run 'TestEST_LibESTClient' ./deploy/test/...
+  libest-client:
+    build:
+      context: ..
+      dockerfile: deploy/test/libest/Dockerfile
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
+    container_name: certctl-test-libest
+    depends_on:
+      certctl-server:
+        condition: service_healthy
+    volumes:
+      # /config/est is the libest working directory — the integration
+      # test writes CSRs / reads issued certs through this mount so the
+      # test-side Go code can inspect estclient's outputs.
+      - ./test/est:/config/est:rw
+      # certctl's CA bundle for TLS pinning. estclient uses this to
+      # verify the certctl-server cert (the same self-signed bundle
+      # the certctl-agent verifies against).
+      - ./test/certs:/config/certs:ro
+    networks:
+      certctl-test:
+        # Was 10.30.50.9 — collided with certctl-tls-init (line 91). Pre-Phase-5
+        # per-vendor matrix structurally hid this: tls-init is profile-less so
+        # it always ran, but libest is profiles=[est-e2e] so it only ran when
+        # the (separate) est-e2e job brought it up. Different jobs ⇒ different
+        # docker networks ⇒ no collision. Surfaced when a future job runs both
+        # profiles together; pre-emptive fix here.
+        ipv4_address: 10.30.50.10
+    restart: unless-stopped
+    profiles: [est-e2e]
+
+  # =============================================================================
+  # Deploy-Hardening II Phase 1 — per-vendor sidecar matrix
+  # =============================================================================
+  # Each sidecar is a real-software target the deploy-vendor-e2e tests
+  # (deploy/test/<vendor>_vendor_e2e_test.go, build tag `integration`)
+  # exercise the connector's atomic + verify + rollback contract against.
+  # All gated behind `profiles: [deploy-e2e]` so routine integration runs
+  # don't pay the per-vendor pull cost.
+  #
+  # Image digests pinned per H-001 guard. Re-pin quarterly per
+  # docs/deployment-vendor-matrix.md.
+
+  apache-test:
+    image: httpd:2.4-alpine@sha256:f9061a65c6e8f50d5636e10806da3d5a238877c11d6bc0149dc5131be0a1a19f
+    container_name: certctl-test-apache
+    ports:
+      - "20443:443"
+    volumes:
+      - ./test/apache/httpd-ssl.conf:/usr/local/apache2/conf/extra/httpd-ssl.conf:ro
+      - ./test/apache/init-cert.sh:/docker-entrypoint-init.sh:ro
+      - apache_certs:/usr/local/apache2/conf/certs
+    networks:
+      certctl-test:
+        ipv4_address: 10.30.50.20
+    profiles: [deploy-e2e]
+
+  haproxy-test:
+    image: haproxy:3.0-alpine@sha256:5b645ad4f3294cf5bc50ab8b201fdeb73732eca2928185df335735c698e8c3e2
+    container_name: certctl-test-haproxy
+    ports:
+      - "20444:443"
+    volumes:
+      - ./test/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - haproxy_certs:/etc/haproxy/certs
+    networks:
+      certctl-test:
+        ipv4_address: 10.30.50.21
+    profiles: [deploy-e2e]
+
+  traefik-test:
+    image: traefik:v3.1@sha256:8516638b18e67e999d293e4ff0e5baf7807674cd4bdd3d36d448497bcbf0a174
+    container_name: certctl-test-traefik
+    command:
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
+      - --entrypoints.websecure.address=:443
+      - --log.level=ERROR
+    ports:
+      - "20445:443"
+    volumes:
+      - ./test/traefik/traefik-dynamic.yml:/etc/traefik/dynamic/traefik-dynamic.yml:ro
+      - traefik_certs:/etc/traefik/certs
+    networks:
+      certctl-test:
+        ipv4_address: 10.30.50.22
+    profiles: [deploy-e2e]
+
+  caddy-test:
+    image: caddy:2.8-alpine@sha256:b95ed06fbc6d74d24a40902090c8cc6086ce7d08ba60a3a7e8e62bf164a9d7bb
+    container_name: certctl-test-caddy
+    command: caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    ports:
+      - "20446:443"
+      - "22019:2019"  # admin API for ValidateOnly probe
+    volumes:
+      - ./test/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_certs:/etc/caddy/certs
+    networks:
+      certctl-test:
+        ipv4_address: 10.30.50.23
+    profiles: [deploy-e2e]
+
+  envoy-test:
+    image: envoyproxy/envoy:v1.32-latest@sha256:6ed0d4f28b8122df896062c425b34f18b8287e8c71c6badb3b84ca2e2f47c519
+    container_name: certctl-test-envoy
+    command: envoy -c /etc/envoy/envoy.yaml --log-level error
+    ports:
+      - "20447:443"
+    volumes:
+      - ./test/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
+      - envoy_certs:/etc/envoy/certs
+    networks:
+      certctl-test:
+        ipv4_address: 10.30.50.24
+    profiles: [deploy-e2e]
+
+  postfix-test:
+    image: boky/postfix:latest@sha256:cd7e192900bfc49a67291a572b5f645f9e7d1b8d7f2b79b0364b4b4176964e21
+    container_name: certctl-test-postfix
+    environment:
+      ALLOWED_SENDER_DOMAINS: "test.local"
+    ports:
+      - "20025:25"
+      - "20465:465"
+    volumes:
+      - postfix_certs:/etc/postfix/certs
+    networks:
+      certctl-test:
+        ipv4_address: 10.30.50.25
+    profiles: [deploy-e2e]
+
+  dovecot-test:
+    image: dovecot/dovecot:latest@sha256:4046993478e8c8bcb841fdbff2d8de1b233484cc0196b3723f6c588e7eaf7301
+    container_name: certctl-test-dovecot
+    ports:
+      - "20993:993"
+      - "20995:995"
+    volumes:
+      - ./test/dovecot/dovecot.conf:/etc/dovecot/dovecot.conf:ro
+      - dovecot_certs:/etc/dovecot/certs
+    networks:
+      certctl-test:
+        ipv4_address: 10.30.50.26
+    profiles: [deploy-e2e]
+
+  openssh-test:
+    image: lscr.io/linuxserver/openssh-server:latest@sha256:742f577d4100f5ad3b38f270d722931bbe98b997444c13b1a2a838df12a9971e
+    container_name: certctl-test-openssh
+    environment:
+      USER_NAME: "certctl"
+      PASSWORD_ACCESS: "true"
+      USER_PASSWORD: "test-only-do-not-use-in-prod"
+      SUDO_ACCESS: "true"
+    ports:
+      - "20022:2222"
+    volumes:
+      - openssh_certs:/config/certs
+    networks:
+      certctl-test:
+        ipv4_address: 10.30.50.27
+    profiles: [deploy-e2e]
+
+  # f5-mock-icontrol: in-tree Go server implementing the iControl REST
+  # surface this bundle exercises (Authenticate, UploadFile, transactions,
+  # SSL profile CRUD). Built from deploy/test/f5-mock-icontrol/Dockerfile;
+  # the operator-supplied real F5 vagrant box is documented in
+  # docs/connector-f5.md as the validation tier above the mock.
+  f5-mock-icontrol:
+    build:
+      context: ..
+      dockerfile: deploy/test/f5-mock-icontrol/Dockerfile
+    container_name: certctl-test-f5-mock
+    ports:
+      # Host port 20449 (NOT 20443 — apache-test owns 20443). The
+      # ci-pipeline-cleanup Phase 5 vendor-matrix collapse brings up
+      # all sidecars simultaneously; the original Phase 1 design
+      # accidentally double-bound 20443 because the per-vendor matrix
+      # only ever ran one sidecar at a time, hiding the collision.
+      - "20449:443"
+    networks:
+      certctl-test:
+        ipv4_address: 10.30.50.28
+    profiles: [deploy-e2e]
+
+  # k8s-kind-test: a kind (Kubernetes-in-Docker) cluster used by the
+  # k8ssecret connector e2e tests. Per frozen decision 0.5, each K8s
+  # version test spins up a fresh kind cluster of the matching version.
+  # Tests are slow (~30-60s startup); marked t.Parallel() where independent.
+  # The kind binary lives in the test image; the Docker socket is mounted
+  # so kind can manage child containers.
+  k8s-kind-test:
+    image: kindest/node:v1.31.0@sha256:7fbc5644a803286a69ff9c5695f03bb01b512896835e15df7df17f756f7245ac
+    container_name: certctl-test-kind
+    privileged: true
+    networks:
+      certctl-test:
+        ipv4_address: 10.30.50.29
+    profiles: [deploy-e2e]
+
+  # windows-iis-test: Windows containers run only on Windows hosts.
+  # CI no longer runs an IIS matrix (per ci-pipeline-cleanup bundle
+  # Phase 6 / frozen decision 0.5 — revises Bundle II decision 0.4).
+  # Two reasons the Windows matrix was deleted: (a) it couldn't
+  # physically work on `windows-latest` GitHub runners (Docker not
+  # started in Windows-containers mode by default; `bridge` network
+  # driver doesn't exist on Windows Docker); (b) all IIS + WinCertStore
+  # vendor-edge tests are t.Log placeholder stubs that exercise no
+  # IIS-specific behavior.
+  #
+  # Operators validate IIS + WinCertStore manually on a Windows host
+  # per the playbook at docs/connector-iis.md::Operator validation playbook.
+  #
+  # The sidecar definition stays here under profiles: [deploy-e2e-windows]
+  # so a Windows operator can opt in via:
+  #   docker compose --profile deploy-e2e-windows up -d windows-iis-test
+  # Linux CI never activates this profile.
+  windows-iis-test:
+    image: mcr.microsoft.com/windows/servercore/iis:windowsservercore-ltsc2022@sha256:8d0b0e651ad514e3fb05978db66f38036118812e1b9314a48f10419cad8a3462
+    container_name: certctl-test-iis
+    ports:
+      - "20448:443"
+    networks:
+      certctl-test:
+        ipv4_address: 10.30.50.30
+    profiles: [deploy-e2e-windows]
+
+# =============================================================================
+# Network
+# =============================================================================
+# Static IPs are required because:
+# - Pebble needs to know the challtestsrv DNS server address (10.30.50.3)
+# - challtestsrv resolves all domains to certctl-server (10.30.50.6) for HTTP-01 challenges
+# - Avoids DNS race conditions during startup
+networks:
+  certctl-test:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.30.50.0/24
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  test_postgres_data:
+    driver: local
+  stepca_data:
+    driver: local
+  agent_keys:
+    driver: local
+  nginx_certs:
+    driver: local
+  # Deploy-Hardening II Phase 1 — per-vendor sidecar cert volumes.
+  apache_certs:
+    driver: local
+  haproxy_certs:
+    driver: local
+  traefik_certs:
+    driver: local
+  caddy_certs:
+    driver: local
+  envoy_certs:
+    driver: local
+  postfix_certs:
+    driver: local
+  dovecot_certs:
+    driver: local
+  openssh_certs:
+    driver: local

@@ -1,0 +1,33 @@
+stages:
+  - build
+
+variables:
+  IMAGE_NAME: ducfuc/certctl-server
+
+build_image:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+
+  script:
+    - mkdir -p /kaniko/.docker
+
+    - |
+      cat > /kaniko/.docker/config.json <<EOF
+      {
+        "auths": {
+          "https://index.docker.io/v1/": {
+            "username": "ducfuc",
+            "password": "${DOCKER_PASSWORD}"
+          }
+        }
+      }
+      EOF
+
+    - |
+      /kaniko/executor \
+        --context "${CI_PROJECT_DIR}" \
+        --dockerfile Dockerfile \
+        --destination ducfuc/certctl-server:latest \
+        --cache=true

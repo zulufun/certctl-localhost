@@ -1,0 +1,2111 @@
+# Connector Development Guide
+
+> Last reviewed: 2026-05-16
+>
+> This is the canonical connector reference: interface contracts,
+> registry, deployment primitive, network scanner, cloud discovery.
+> Each built-in connector below has a sibling per-page that goes
+> deeper on operator-grade material (vendor edges, troubleshooting,
+> rotation playbooks, when-to-use vs alternatives). Use this index
+> to navigate; jump to the sibling pages for hands-on operator
+> material.
+
+Connectors extend certctl to integrate with external systems for certificate issuance, deployment, and notifications. This guide covers the connector interfaces, built-in implementations, and how to build your own.
+
+**Per-connector deep-dive pages** (siblings in this directory):
+
+Issuer connectors:
+
+- [ACME](acme.md) — RFC 8555 v2 client (Let's Encrypt, ZeroSSL, Sectigo, Buypass, GTS, SSL.com)
+- [ADCS integration](adcs.md) — Active Directory Certificate Services as enterprise root via Local CA sub-CA mode
+- [AWS ACM Private CA](aws-acm-pca.md) — managed private CA on AWS, IAM-authenticated
+- [DigiCert CertCentral](digicert.md) — commercial public CA (DV / OV / EV)
+- [EJBCA (Keyfactor)](ejbca.md) — self-hosted open-source / Keyfactor enterprise CA
+- [Entrust Certificate Services](entrust.md) — Entrust CA Gateway with mTLS auth
+- [GlobalSign Atlas HVCA](globalsign.md) — Atlas HVCA with dual mTLS + API key/secret auth
+- [Google CAS](google-cas.md) — managed private CA on GCP, OAuth2 service-account auth
+- [Local CA](local-ca.md) — Go `crypto/x509`-backed signer (self-signed, sub-CA, tree mode)
+- [OpenSSL / Custom CA](openssl.md) — script-based shell-out for arbitrary CLI-driven CAs
+- [Sectigo SCM](sectigo.md) — Sectigo Certificate Manager REST API
+- [step-ca (Smallstep)](step-ca.md) — JWK-provisioner authenticated synchronous internal CA
+- [Vault PKI](vault.md) — HashiCorp Vault PKI engine, synchronous issuance
+
+Target connectors:
+
+- [Apache](apache.md) — Apache httpd, separate-file deploy + `apachectl configtest`
+- [AWS Certificate Manager](aws-acm.md) — deploy into ACM for ALB / CloudFront / API Gateway
+- [Azure Key Vault](azure-kv.md) — deploy into Key Vault for App Gateway / Front Door / App Service
+- [Caddy](caddy.md) — admin-API hot reload or file-watcher fallback
+- [Envoy](envoy.md) — file SDS hot reload, optional `sds.json`
+- [F5 BIG-IP](f5.md) — proxy-agent pattern + transactional iControl REST
+- [HAProxy](haproxy.md) — combined-PEM deploy + `haproxy -c` validate
+- [IIS](iis.md) — Microsoft IIS, local PowerShell + WinRM modes
+- [Java Keystore](jks.md) — JKS / PKCS#12 via `keytool` with atomic snapshot rollback
+- [NGINX](nginx.md) — separate-file deploy + `nginx -t` validate
+- [Postfix / Dovecot](postfix.md) — dual-mode mail-server TLS connector
+- [SSH (agentless)](ssh.md) — agentless deploy over SSH/SFTP for Linux/Unix targets
+- [Traefik](traefik.md) — file-provider zero-reload deploy
+- [Windows Certificate Store](wincertstore.md) — non-IIS Windows services (Exchange, RDP, SQL, ADFS)
+
+### Preview connectors (not in the production-ready set)
+
+SEC-003-K8S closure (Sprint 4, 2026-05-16) moved Kubernetes Secrets
+out of the canonical fourteen-target index because the production
+client-go integration is not yet wired — the connector ships but
+refuses to register without `CERTCTL_K8SSECRET_PREVIEW_ACK=true`
+and the CRUD methods return *"real Kubernetes client not
+implemented"* until the integration lands.
+
+- [Kubernetes Secrets](k8s.md) — **preview** — k8s.io/tls Secrets atomic update. See [`docs/reference/deployment-model.md`](../deployment-model.md) row `k8ssecret` for the bundle-2 V2-blocker scope.
+
+## Contents
+
+1. [Overview](#overview)
+2. [Issuer Connector](#issuer-connector)
+   - [Interface](#interface)
+   - [Built-in: Local CA](#built-in-local-ca)
+   - [Built-in: ACME v2 (Let's Encrypt, Sectigo, ZeroSSL)](#built-in-acme-v2-lets-encrypt-sectigo-zerossl)
+   - [Built-in: step-ca (Smallstep Private CA)](#built-in-step-ca-smallstep-private-ca)
+   - [OpenSSL / Custom CA](#openssl--custom-ca)
+   - [Built-in: Vault PKI](#built-in-vault-pki)
+   - [Built-in: DigiCert CertCentral](#built-in-digicert-certcentral)
+   - [Built-in: Sectigo SCM](#built-in-sectigo-scm)
+   - [Built-in: Google CAS](#built-in-google-cas)
+   - [Built-in: AWS ACM Private CA](#built-in-aws-acm-private-ca)
+   - [Revocation Across Issuers](#revocation-across-issuers)
+   - [EST Integration (GetCACertPEM)](#est-integration-getcacertpem)
+   - [Building a Custom Issuer](#building-a-custom-issuer)
+3. [ACME Server (Built-in)](#acme-server-built-in)
+4. [Target Connector](#target-connector)
+   - [Interface](#interface-1)
+   - [Built-in: NGINX](#built-in-nginx)
+   - [Built-in: Apache httpd](#built-in-apache-httpd)
+   - [Built-in: HAProxy](#built-in-haproxy)
+   - [Built-in: Traefik](#built-in-traefik)
+   - [Built-in: Envoy](#built-in-envoy)
+   - [Built-in: Postfix / Dovecot](#built-in-postfix--dovecot)
+   - [Built-in: Caddy](#built-in-caddy)
+   - [F5 BIG-IP (Implemented)](#f5-big-ip-implemented)
+   - [IIS (Implemented, Dual-Mode)](#iis-implemented-dual-mode)
+   - [SSH (Agentless Deployment)](#ssh-agentless-deployment)
+   - [Windows Certificate Store](#windows-certificate-store)
+   - [Java Keystore (JKS / PKCS#12)](#java-keystore-jks--pkcs12)
+   - [Kubernetes Secrets](#kubernetes-secrets)
+5. [Notifier Connector](#notifier-connector)
+   - [Interface](#interface-2)
+6. [Registering a Connector](#registering-a-connector)
+   - [IssuerConnectorAdapter](#issuerconnectoradapter)
+   - [Notifier Registration](#notifier-registration)
+7. [Testing Connectors](#testing-connectors)
+   - [Unit Tests](#unit-tests)
+   - [Integration Tests](#integration-tests)
+8. [Best Practices](#best-practices)
+9. [Agent Discovery Scanner](#agent-discovery-scanner)
+   - [Configuration](#configuration)
+   - [How It Works](#how-it-works)
+   - [API Endpoints](#api-endpoints)
+   - [Use Cases](#use-cases)
+10. [Network Certificate Scanner (M21)](#network-certificate-scanner-m21)
+    - [Configuration](#configuration-1)
+    - [Creating Scan Targets](#creating-scan-targets)
+    - [How It Works](#how-it-works-1)
+    - [API Endpoints](#api-endpoints-1)
+    - [Scheduler Integration](#scheduler-integration)
+    - [Use Cases](#use-cases-1)
+11. [What's Next](#whats-next)
+
+## Overview
+
+Three types of connectors:
+
+1. **Issuer Connector** — Obtains certificates from CAs. 12 built-in: Local CA (self-signed + sub-CA + tree mode; ADCS sub-CA mode is documented separately), ACME v2 (HTTP-01, DNS-01, DNS-PERSIST-01, ARI, EAB, profile selection), step-ca, OpenSSL/Custom CA, Vault PKI, DigiCert CertCentral, Sectigo SCM, Google CAS, AWS ACM Private CA, Entrust Certificate Services, GlobalSign Atlas HVCA, EJBCA (Keyfactor)
+2. **Target Connector** — Deploys certificates to infrastructure. 14 production-ready: NGINX, Apache httpd, HAProxy, Traefik, Caddy, Envoy, Postfix/Dovecot (dual-mode), IIS (local PowerShell + WinRM proxy), F5 BIG-IP (proxy agent), SSH (agentless), Windows Certificate Store, Java Keystore (JKS / PKCS#12), AWS Certificate Manager, Azure Key Vault. Plus Kubernetes Secrets shipped as preview — see the *Preview connectors* subsection above for the ACK gate.
+3. **Notifier Connector** — Sends alerts about certificate events (Email, Webhooks, Slack, Microsoft Teams, PagerDuty, OpsGenie implemented)
+
+All connectors accept JSON configuration at initialization, support config validation, and are registered in the service layer. Issuer connectors run on the control plane; target connectors run on agents. For network appliances where agents can't be installed, a **proxy agent** in the same network zone handles deployment — the server never initiates outbound connections.
+
+## Issuer Connector
+
+Issuer connectors obtain signed certificates from Certificate Authorities.
+
+### Interface
+
+```go
+// internal/connector/issuer/interface.go
+package issuer
+
+type Connector interface {
+    // ValidateConfig checks that the issuer configuration is valid
+    ValidateConfig(ctx context.Context, config json.RawMessage) error
+
+    // IssueCertificate submits a CSR and returns a signed certificate
+    IssueCertificate(ctx context.Context, request IssuanceRequest) (*IssuanceResult, error)
+
+    // RenewCertificate renews an existing certificate
+    RenewCertificate(ctx context.Context, request RenewalRequest) (*IssuanceResult, error)
+
+    // RevokeCertificate revokes a previously issued certificate
+    RevokeCertificate(ctx context.Context, request RevocationRequest) error
+
+    // GetOrderStatus checks the status of an async issuance order
+    GetOrderStatus(ctx context.Context, orderID string) (*OrderStatus, error)
+
+    // GenerateCRL generates a DER-encoded X.509 CRL signed by this issuer.
+    // Returns nil if the issuer does not support CRL generation (e.g., ACME).
+    GenerateCRL(ctx context.Context, revokedCerts []RevokedCertEntry) ([]byte, error)
+
+    // SignOCSPResponse signs an OCSP response for the given certificate serial.
+    // Returns nil if the issuer does not support OCSP (e.g., ACME).
+    SignOCSPResponse(ctx context.Context, req OCSPSignRequest) ([]byte, error)
+
+    // GetCACertPEM returns the PEM-encoded CA certificate chain for this issuer.
+    // Used by the EST server's /cacerts endpoint (RFC 7030).
+    // Returns error if the issuer doesn't provide a static CA chain (e.g., ACME, step-ca).
+    GetCACertPEM(ctx context.Context) (string, error)
+}
+
+type IssuanceRequest struct {
+    CommonName string
+    SANs       []string
+    CSRPEM     string
+}
+
+type IssuanceResult struct {
+    CertPEM   string
+    ChainPEM  string
+    Serial    string
+    NotBefore time.Time
+    NotAfter  time.Time
+    OrderID   string
+}
+
+type RenewalRequest struct {
+    CommonName string
+    SANs       []string
+    CSRPEM     string
+    OrderID    *string // optional, for tracking (pointer — nil when not provided)
+}
+
+type RevocationRequest struct {
+    Serial string
+    Reason *string // optional (pointer — nil when not provided)
+}
+
+type OrderStatus struct {
+    OrderID   string
+    Status    string     // "pending", "valid", "invalid", "expired"
+    Message   *string    // optional (pointer fields are omitted from JSON when nil)
+    CertPEM   *string    // populated when order is complete
+    ChainPEM  *string    // populated when order is complete
+    Serial    *string    // populated when order is complete
+    NotBefore *time.Time // populated when order is complete
+    NotAfter  *time.Time // populated when order is complete
+    UpdatedAt time.Time
+}
+```
+
+### Built-in: Local CA
+
+The Local CA issuer signs certificates using Go's `crypto/x509` library. It supports two modes:
+
+**Self-signed mode (default):** Creates a CA on first use (in memory), issues certificates with proper serial numbers, validity periods, SANs, and key usage extensions. Designed for development and demos — certificates are self-signed and not trusted by browsers.
+
+**Sub-CA mode:** Loads a CA certificate and private key from disk (`CERTCTL_CA_CERT_PATH` + `CERTCTL_CA_KEY_PATH`). The CA cert is signed by an upstream CA (e.g., ADCS), so all issued certificates chain to the enterprise root trust hierarchy. Clients that already trust the enterprise root automatically trust certctl-issued certs. Supports RSA, ECDSA, and PKCS#8 key formats. If the paths are not set, falls back to self-signed mode. The loaded certificate must have `IsCA=true` and `KeyUsageCertSign`.
+
+**Tree mode (Rank 8 — multi-level CA hierarchy):** When `Issuer.HierarchyMode = "tree"` is set on the issuer row, the local connector reads the active CA hierarchy from the `intermediate_cas` table and assembles `IssuanceResult.ChainPEM` by walking the `parent_ca_id` ancestry from the issuing leaf CA up to the root. Tree mode is operator-managed via the admin-gated `/api/v1/issuers/{id}/intermediates` and `/api/v1/intermediates/{id}` endpoints (`POST` to create / sign children, `GET` to list / inspect, `POST .../retire` to two-phase retire). The signing path is shared with single-mode (cert is signed via `c.caCert` + `c.caSigner` from the on-disk issuing CA cert+key); only the chain bytes differ. RFC 5280 §3.2 (self-signed root validation), §4.2.1.9 (path-length tightening), and §4.2.1.10 (NameConstraints subset semantics) are enforced at the service layer fail-closed. The default is `single`, byte-identical to the pre-Rank-8 historical flow. See `docs/reference/intermediate-ca-hierarchy.md` for the operator runbook covering common 4-level boundary, 3-level policy, and 2-level internal-PKI patterns + the migration runbook for flipping a single-mode issuer to tree.
+
+**CRL and OCSP support (M15b):** The Local CA supports DER-encoded X.509 CRL generation served unauthenticated at `GET /.well-known/pki/crl/{issuer_id}` (RFC 5280 §5, RFC 8615, `Content-Type: application/pkix-crl`) with 24-hour validity. An embedded OCSP responder at `GET /.well-known/pki/ocsp/{issuer_id}/{serial}` (RFC 6960, `Content-Type: application/ocsp-response`) returns signed OCSP responses for issued certificates (good/revoked/unknown status). Both endpoints are reachable by relying parties with no certctl API credentials, which is how standard TLS clients, browsers, and hardware appliances consume these resources. Certificates with profile TTL < 1 hour automatically skip CRL/OCSP — expiry is treated as sufficient revocation for short-lived credentials.
+
+**Extended Key Usage (EKU) support (M27):** The Local CA respects EKU constraints from certificate profiles and adjusts key usage flags accordingly. For S/MIME certificates (emailProtection EKU), it uses `DigitalSignature | ContentCommitment` instead of the TLS default. For TLS certificates (serverAuth/clientAuth EKU), it uses `DigitalSignature | KeyEncipherment`. This enables support for multiple certificate types — TLS, S/MIME, code signing, timestamping — from a single CA.
+
+**MaxTTL enforcement (M11c):** When a certificate profile defines a maximum TTL, the Local CA caps the `NotAfter` field to `min(validity_days, maxTTL)`. This ensures certificates never exceed the profile's configured lifetime regardless of the issuer's `validity_days` setting.
+
+Configuration:
+```json
+{
+  "ca_common_name": "CertCtl Local CA",
+  "validity_days": 90,
+  "ca_cert_path": "/etc/certctl/ca/ca.pem",
+  "ca_key_path": "/etc/certctl/ca/ca-key.pem"
+}
+```
+
+Location: `internal/connector/issuer/local/local.go`
+
+### Built-in: ACME v2 (Let's Encrypt, Sectigo, ZeroSSL)
+
+The ACME connector implements the full ACME v2 protocol using Go's `golang.org/x/crypto/acme` package. It supports three challenge methods:
+
+**HTTP-01 (default):** A built-in temporary HTTP server starts on demand during certificate issuance. The domain being validated must resolve to the machine running the connector, and the configured HTTP port must be reachable from the internet.
+
+**DNS-01 (for wildcards):** Creates DNS TXT records via user-provided scripts. Required for wildcard certificates (`*.example.com`) and hosts that can't serve HTTP on port 80. The connector invokes external scripts to create and clean up `_acme-challenge` TXT records, making it compatible with any DNS provider (Cloudflare, Route53, Azure DNS, etc.).
+
+**DNS-PERSIST-01 (standing record):** Creates a one-time persistent TXT record at `_validation-persist.<domain>` containing the CA's issuer domain and your ACME account URI. Once set, this record authorizes unlimited future certificate issuances without per-renewal DNS updates. Based on [draft-ietf-acme-dns-persist](https://datatracker.ietf.org/doc/draft-ietf-acme-dns-persist/) and CA/Browser Forum ballot SC-088v3. If the CA doesn't offer dns-persist-01 yet, the connector falls back to dns-01 automatically.
+
+**ACME Renewal Information (ARI, RFC 9773):** Instead of using fixed renewal thresholds (e.g., renew 30 days before expiry), certctl can ask the CA when it should renew. Enable with `CERTCTL_ACME_ARI_ENABLED=true`. The ARI protocol lets the CA specify a `suggestedWindow` (start and end times) for when you should renew — useful for distributing load during maintenance windows or coordinating mass revocation scenarios. Cert ID is computed as `base64url(SHA-256(DER cert))`. If the CA doesn't support ARI (404 response), certctl automatically falls back to threshold-based renewal with no operator intervention required.
+
+HTTP-01 configuration:
+```json
+{
+  "directory_url": "https://acme-staging-v02.api.letsencrypt.org/directory",
+  "email": "admin@example.com",
+  "http_port": 80
+}
+```
+
+DNS-01 configuration:
+```json
+{
+  "directory_url": "https://acme-v02.api.letsencrypt.org/directory",
+  "email": "admin@example.com",
+  "challenge_type": "dns-01",
+  "dns_present_script": "/etc/certctl/dns/create-record.sh",
+  "dns_cleanup_script": "/etc/certctl/dns/delete-record.sh",
+  "dns_propagation_wait": 30
+}
+```
+
+DNS-PERSIST-01 configuration:
+```json
+{
+  "directory_url": "https://acme-v02.api.letsencrypt.org/directory",
+  "email": "admin@example.com",
+  "challenge_type": "dns-persist-01",
+  "dns_present_script": "/etc/certctl/dns/create-record.sh",
+  "dns_persist_issuer_domain": "letsencrypt.org",
+  "dns_propagation_wait": 30
+}
+```
+
+The present script creates a TXT record at `_validation-persist.<domain>` with the value `letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/<your-id>`. This record is permanent — no cleanup script is needed.
+
+ZeroSSL configuration (requires External Account Binding):
+```json
+{
+  "directory_url": "https://acme.zerossl.com/v2/DV90",
+  "email": "admin@example.com",
+  "eab_kid": "your-zerossl-eab-kid",
+  "eab_hmac": "your-zerossl-eab-hmac-base64url"
+}
+```
+
+ZeroSSL, Google Trust Services, and SSL.com require External Account Binding (EAB) for ACME account registration. For most CAs, get your EAB credentials from the CA's dashboard and provide them via `eab_kid` and `eab_hmac`. The HMAC key must be base64url-encoded (no padding). CAs that don't require EAB (Let's Encrypt, Buypass) ignore these fields.
+
+**ZeroSSL auto-EAB:** When the directory URL points to ZeroSSL and no EAB credentials are provided, certctl automatically fetches them from ZeroSSL's public API (`api.zerossl.com/acme/eab-credentials-email`) using your configured email address. No dashboard visit required — just set the directory URL and email, and it works. This is the same approach used by Caddy and acme.sh.
+
+Minimal ZeroSSL configuration (auto-EAB):
+```json
+{
+  "directory_url": "https://acme.zerossl.com/v2/DV90",
+  "email": "admin@example.com"
+}
+```
+
+DNS hook scripts receive these environment variables: `CERTCTL_DNS_DOMAIN` (domain being validated), `CERTCTL_DNS_FQDN` (full record name — `_acme-challenge.<domain>` for dns-01, `_validation-persist.<domain>` for dns-persist-01), `CERTCTL_DNS_VALUE` (TXT record value), `CERTCTL_DNS_TOKEN` (ACME challenge token). The present script must create the TXT record and exit 0; the cleanup script removes it (dns-01 only).
+
+Environment variables for the default ACME connector:
+- `CERTCTL_ACME_DIRECTORY_URL` — ACME directory URL
+- `CERTCTL_ACME_EMAIL` — Contact email for account registration
+- `CERTCTL_ACME_EAB_KID` — External Account Binding Key ID (required by ZeroSSL, Google Trust Services, SSL.com)
+- `CERTCTL_ACME_EAB_HMAC` — External Account Binding HMAC key (base64url-encoded)
+- `CERTCTL_ACME_CHALLENGE_TYPE` — `http-01` (default), `dns-01`, or `dns-persist-01`
+- `CERTCTL_ACME_DNS_PRESENT_SCRIPT` — Path to DNS record creation script (dns-01 and dns-persist-01)
+- `CERTCTL_ACME_DNS_CLEANUP_SCRIPT` — Path to DNS record cleanup script (dns-01 only, not used by dns-persist-01)
+- `CERTCTL_ACME_DNS_PERSIST_ISSUER_DOMAIN` — CA issuer domain for persistent record (dns-persist-01 only, e.g., `letsencrypt.org`)
+- `CERTCTL_ACME_PROFILE` — Certificate profile for the newOrder request. Let's Encrypt supports `tlsserver` (standard TLS, default) and `shortlived` (6-day certs). Leave empty for the CA's default profile.
+
+**Certificate Profiles:** Let's Encrypt (GA January 2026) supports ACME certificate profile selection. Set `CERTCTL_ACME_PROFILE=shortlived` to request 6-day certificates — ideal for ephemeral workloads where short validity substitutes for revocation. The `tlsserver` profile produces standard TLS certificates. When the profile field is empty (default), the CA uses its default profile, maintaining full backward compatibility.
+
+The connector is registered in the issuer registry under `iss-acme-staging` and `iss-acme-prod`. Use `iss-acme-staging` for Let's Encrypt staging (rate-limit-friendly testing) and `iss-acme-prod` for production certificates.
+
+**Note:** ACME-issued certificates rely on the Local CA for CRL/OCSP endpoints if they are stored in certctl's inventory. For issuers with their own public CRL/OCSP infrastructure (e.g., Let's Encrypt), clients should validate against the issuer's endpoints instead.
+
+**Revocation by serial number.** RFC 8555 §7.6 requires the certificate DER bytes (not just the serial) on the revoke wire — but a CLM platform's job is to abstract over that limitation. Operators routinely have only the serial in hand: the original PEM was lost, the private key was rotated, the operator clicked "revoke" in the GUI based on a row in the certs list. certctl's ACME `RevokeCertificate(ctx, RevocationRequest{Serial: ...})` looks the serial up in the local cert store (`certificate_versions.pem_chain`), decodes the leaf-cert PEM into DER, and calls the ACME revoke endpoint with `(accountKey, der, reasonCode)` — RFC 8555 §7.6 case 1, "revocation request signed with account key". This works because the same account key issued the cert, so authority is intrinsic.
+
+The cert version must exist in the local store: this means the cert was issued through certctl, not imported. If `GetVersionBySerial` returns `sql.ErrNoRows`, the connector returns an actionable error pointing at the local-store requirement. Revoke-by-serial is therefore only available for ACME certs that certctl issued.
+
+Reason codes follow RFC 5280 §5.3.1: nil reason maps to `unspecified` (0), and the connector accepts the canonical camelCase form (`keyCompromise`, `cACompromise`, `affiliationChanged`, `superseded`, `cessationOfOperation`, `certificateHold`, `removeFromCRL`, `privilegeWithdrawn`, `aACompromise`) plus underscore_lower and ALL_CAPS_UNDERSCORE variants. An unknown reason returns an error rather than silently demoting to `unspecified` — operators rely on the reason for audit reporting.
+
+Audit reference: 2026-05-01 issuer coverage audit Top-10 fix #7.
+
+Location: `internal/connector/issuer/acme/acme.go`, `internal/connector/issuer/acme/dns.go`
+
+### Built-in: step-ca (Smallstep Private CA)
+
+The step-ca connector integrates with Smallstep's step-ca private certificate authority using its native `/sign` API with JWK provisioner authentication. This is simpler than ACME for internal PKI — no challenge solving, no domain validation, just CSR + auth token → signed certificate.
+
+Configuration:
+```json
+{
+  "ca_url": "https://ca.internal:9000",
+  "provisioner_name": "certctl",
+  "provisioner_key_path": "/etc/certctl/stepca/provisioner.json",
+  "provisioner_password": "...",
+  "root_cert_path": "/etc/certctl/stepca/root_ca.crt",
+  "validity_days": 90
+}
+```
+
+Environment variables:
+- `CERTCTL_STEPCA_URL` — step-ca server URL
+- `CERTCTL_STEPCA_PROVISIONER` — JWK provisioner name
+- `CERTCTL_STEPCA_KEY_PATH` — Path to provisioner private key (JWK JSON)
+- `CERTCTL_STEPCA_PASSWORD` — Provisioner key password
+
+The connector is registered in the issuer registry under `iss-stepca`. step-ca also works with the existing ACME connector (point `iss-acme-*` at step-ca's ACME directory URL for ACME-based issuance).
+
+**Note:** step-ca-issued certificates rely on step-ca's own CRL/OCSP infrastructure. certctl's local CRL/OCSP endpoints (`GET /.well-known/pki/crl/{issuer_id}` and `GET /.well-known/pki/ocsp/{issuer_id}/{serial}`, served unauthenticated per RFC 5280 §5 / RFC 6960 / RFC 8615) are populated from step-ca's revocation data if available, but clients should validate against step-ca's endpoints for the authoritative status.
+
+**MaxTTL enforcement (M11c):** When a certificate profile defines a maximum TTL, the step-ca connector caps the `NotAfter` field to ensure the issued certificate does not exceed the profile limit, regardless of the step-ca provisioner's own maximum.
+
+Location: `internal/connector/issuer/stepca/stepca.go`
+
+### OpenSSL / Custom CA
+
+Script-based issuer connector for organizations with existing CA tooling. Delegates certificate signing, revocation, and CRL generation to user-provided shell scripts.
+
+**Configuration:**
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `CERTCTL_OPENSSL_SIGN_SCRIPT` | Yes | Script that receives CSR on stdin and outputs signed PEM cert on stdout |
+| `CERTCTL_OPENSSL_REVOKE_SCRIPT` | No | Script to revoke a certificate (receives serial number as argument) |
+| `CERTCTL_OPENSSL_CRL_SCRIPT` | No | Script that outputs DER-encoded CRL on stdout |
+| `CERTCTL_OPENSSL_TIMEOUT_SECONDS` | No | Script execution timeout (default: 30s) |
+
+The sign script receives the CSR PEM on stdin and should output the signed certificate PEM on stdout. The connector parses the certificate to extract serial number, validity dates, and chain information. Before shell execution, serial numbers are validated as hex-only (`^[0-9a-fA-F]+$`) and revocation reason codes are validated against the RFC 5280 specification to prevent command injection.
+
+#### Operator playbook: OpenSSL shell-out threat model
+
+certctl's OpenSSL adapter `exec`s an operator-supplied script for every certificate lifecycle operation (issue / renew / revoke / CRL generation). The script runs as the certctl-server user with that user's full filesystem and network access. **This is by design** — the OpenSSL adapter exists precisely to support operators integrating with arbitrary CLI-driven CAs that don't have a Go SDK. The cost is a wider attack surface than any other issuer in the catalog. This subsection enumerates the threat model + mitigations so an operator (or an acquirer's security reviewer) can decide whether the adapter is appropriate for their environment. Top-10 fix #6 of the 2026-05-03 issuer-coverage audit.
+
+**Why the adapter accepts a shell-out at all:**
+
+- Many enterprise PKI operators run their own CLI-driven CA (BoringSSL, custom OpenSSL wrappers, hardware-CA controllers, internal CAs with no published SDK). A Go SDK doesn't exist; a shell-out is the only integration path short of building a full Go-native adapter per CA.
+- Mirrors the same posture the SSH connector applies (`InsecureIgnoreHostKey` on operator-controlled networks): certctl trusts the operator to configure the integration sensibly.
+- Avoids forking the project per-CA — one OpenSSL adapter can cover dozens of CLI-driven CAs.
+
+**Threat model the adapter accepts:**
+
+- A trusted operator pointing at a trusted script that lives in a trusted filesystem location (`/usr/local/bin/`, `/opt/<vendor>/bin/`, etc.) with appropriate ownership (root-owned, mode 0755) and a clear audit trail (filesystem-monitored, version-controlled).
+- Env-var inheritance from the certctl-server process. Operators must NOT export sensitive credentials (Vault tokens, API keys for OTHER systems) into certctl-server's environment — or, if they must, must accept that those credentials are visible to the issuance script. The connector does not whitelist or strip env vars before fork.
+- The hex-only serial-number filter (`^[0-9a-fA-F]+$`) and the RFC 5280 reason-code allow-list at `internal/validation/command.go` are defenses against argv-injection. They are NOT defenses against a malicious script — an operator who deploys a malicious script is outside this threat model entirely.
+
+**Threat model the adapter does NOT accept:**
+
+- A script path under operator-writable filesystem (`/tmp`, `/var/tmp`, `~`) where a non-root user can swap the binary mid-flight. **Symlink attack:** a non-root user with write access to the directory replaces the script with a symlink to `/etc/shadow` or `/root/.ssh/authorized_keys`; certctl-server reads (or in the worst case writes via a malicious script) those files.
+- Untrusted script content. The script can do anything the certctl-server user can — modify state outside `/etc/certctl/`, exfiltrate data, write SSH keys to enable persistence. Operators MUST review every script line before deploying.
+- A multi-tenant host where multiple operators deploy scripts under the same certctl-server. Process-level isolation isn't enforced; one operator's script can read another's working files (the temp CSR/cert files the connector writes to `os.TempDir()` are mode 0600 but are visible by name to anyone who can list the directory).
+
+**Mitigations operators can layer on:**
+
+- **Run certctl-server under a dedicated unprivileged user** (e.g. `certctl:certctl`). Limits the blast radius of a misbehaving script. The systemd unit ships with `User=certctl` by default — keep it that way.
+- **Pin the script path to a root-owned mode-0755 binary** (`/usr/local/bin/issue-cert.sh`, root:root, 0755). Add a filesystem audit rule (`auditctl -w /usr/local/bin/issue-cert.sh -p wa -k certctl-script`) so any write attempt to the script is logged.
+- **Set a per-call timeout via `CERTCTL_OPENSSL_TIMEOUT_SECONDS`** (env-mapped to `Config.TimeoutSeconds`, default 30s). The connector wires this through `exec.CommandContext` so a hung script is killed at the wall-clock budget. Production operators should set it to the upper bound of legitimate issuance time — anything longer is a runaway.
+- **Sanitise the certctl-server environment.** systemd's `Environment=` directive lets operators allow-list which env vars certctl-server (and therefore the script) sees. Default-deny is the safe posture; the connector itself does NOT scrub envs before fork.
+- **Use a chroot or container.** systemd's `RootDirectory=` or running certctl-server in a container limits the filesystem the script can touch. Trade-off: complicates operator debugging.
+- **Audit the script's behaviour.** A wrapper script that logs every invocation's argv + env-snapshot + exit code to a separate audit log gives operators a forensic trail. The wrapper is the operator's responsibility — certctl logs the cmd start/end at INFO level, which is enough for "did it run?" but not for "what did it do?"
+- **Per-call concurrency bound.** The renewal scheduler's `CERTCTL_RENEWAL_CONCURRENCY` (Bundle L closure) bounds scheduled traffic; ad-hoc `POST /api/v1/certificates` traffic isn't bounded. For high-volume environments, layer a reverse-proxy rate limit (nginx, HAProxy) in front of the API.
+
+**When you should NOT use the OpenSSL adapter:**
+
+- Regulated environments where shell-out attack surfaces are formally disallowed by your security policy.
+- Multi-tenant certctl-server deployments where tenant-A's script can affect tenant-B's certificates.
+- Environments without operator review of every script line — trust-on-first-use is the wrong posture for a shell-out.
+- For these cases, switch to a Go-native issuer adapter (Vault, DigiCert, Sectigo, ACME, AWSACMPCA, GoogleCAS, EJBCA, Entrust, GlobalSign, step-ca) or commission a custom Go-native adapter for your CA (the issuer connector interface in `internal/connector/issuer/interface.go` is small — `IssueCertificate` + `RevokeCertificate` + `GetCACertPEM` + a few stubs).
+
+**V3-Pro forward path:**
+
+The hardened OpenSSL adapter (chroot/container by default, env-var allow-list at the adapter layer, signed-script-binary verification, audit-log-on-every-invocation, per-call concurrency bound shared with the API surface) is V3-Pro work. Tracking: project roadmap, "OpenSSL hardened mode".
+
+### Revocation Across Issuers
+
+All issuer connectors implement `RevokeCertificate(ctx, serial, reason)`. When a certificate is revoked via `POST /api/v1/certificates/{id}/revoke`, certctl notifies the issuing CA on a best-effort basis — the revocation succeeds in certctl's inventory even if the CA notification fails (e.g., CA is temporarily unreachable). This ensures revocation is never blocked by external dependencies.
+
+Each issuer handles revocation differently:
+
+- **Local CA**: Updates the in-memory revocation list. DER-encoded CRLs and OCSP responses are generated from this list.
+- **ACME**: ACME v2 has limited revocation support — certctl records the revocation locally and serves it via CRL/OCSP.
+- **step-ca**: Calls step-ca's `/revoke` API endpoint. Clients should check step-ca's own CRL/OCSP for authoritative status.
+- **OpenSSL/Custom CA**: Invokes the configured revoke script (`CERTCTL_OPENSSL_REVOKE_SCRIPT`) with the serial number as an argument.
+
+### EST/SCEP Integration (GetCACertPEM)
+
+The `GetCACertPEM()` method returns the PEM-encoded CA certificate chain, used by both the EST server's `/.well-known/est/cacerts` endpoint (RFC 7030) and the SCEP server's `GetCACert` operation (RFC 8894) to distribute the CA chain to enrolling devices. Each issuer handles this differently:
+
+- **Local CA**: Returns the CA certificate PEM (self-signed or sub-CA cert). This is the primary EST/SCEP issuer.
+- **ACME**: Returns error — ACME CAs provide chains per-issuance, not statically.
+- **step-ca**: Returns error — step-ca serves its own `/root` endpoint for CA distribution.
+- **OpenSSL/Custom CA**: Returns error — custom script-based CAs have no CA cert access through certctl.
+
+Note: EST and SCEP are not connectors — they are protocol handlers (`internal/api/handler/est.go` and `internal/api/handler/scep.go`) that delegate certificate issuance to whichever issuer connector is configured via `CERTCTL_EST_ISSUER_ID` or `CERTCTL_SCEP_ISSUER_ID` (or the per-profile `CERTCTL_EST_PROFILE_<NAME>_ISSUER_ID` / `CERTCTL_SCEP_PROFILE_<NAME>_ISSUER_ID` form for multi-endpoint dispatch). Both share a common `internal/pkcs7` package for PKCS#7 response encoding. See the [Architecture Guide](../architecture.md#est-server-rfc-7030) for the V2-baseline server and [`Architecture Guide::EST Production Deployment`](../architecture.md#est-server-rfc-7030--production-deployment) for the post-2026-04-29 hardening master bundle.
+
+#### Multi-profile EST dispatch + production hardening
+
+A single certctl deploy can publish multiple EST endpoints — one per fleet (laptops vs IoT vs WiFi/802.1X) — by setting `CERTCTL_EST_PROFILES=<comma-separated>` and a matching set of `CERTCTL_EST_PROFILE_<NAME>_*` environment variables. Each profile carries its own issuer binding, optional `CertificateProfile`, optional mTLS sibling route trust bundle, optional HTTP Basic enrollment-password, optional RFC 9266 channel binding requirement, optional per-(CN, sourceIP) rate limit, and optional server-side keygen — heterogeneous fleets share one server, distinct credentials. The router publishes `/.well-known/est/<pathID>/{cacerts,simpleenroll,simplereenroll,csrattrs,serverkeygen}` per profile (legacy `/.well-known/est/` for the empty-PathID single-profile back-compat case when `CERTCTL_EST_PROFILES` is unset).
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `CERTCTL_EST_PROFILES` | No | — | Comma-separated profile names (e.g. `corp,iot,wifi`). When unset, the legacy single-profile config (`CERTCTL_EST_ENABLED` / `CERTCTL_EST_ISSUER_ID` / `CERTCTL_EST_PROFILE_ID`) is used. PathID must be `[a-z0-9-]+`, no leading/trailing hyphen. |
+| `CERTCTL_EST_PROFILE_<NAME>_ISSUER_ID` | Yes (per profile) | — | Issuer connector ID this profile dispatches to (e.g. `iss-local`, `iss-vault-corp`). |
+| `CERTCTL_EST_PROFILE_<NAME>_PROFILE_ID` | When `_SERVERKEYGEN_ENABLED=true` | — | Optional `CertificateProfile` constraint. Required when server-keygen is on (the server needs a profile to pin `AllowedKeyAlgorithms`). |
+| `CERTCTL_EST_PROFILE_<NAME>_ALLOWED_AUTH_MODES` | No | — (anonymous, back-compat) | Comma-separated auth mode list. Valid: `mtls`, `basic`. Cross-checks at boot: `mtls` requires `_MTLS_ENABLED=true`; `basic` requires `_ENROLLMENT_PASSWORD` non-empty. |
+| `CERTCTL_EST_PROFILE_<NAME>_ENROLLMENT_PASSWORD` | When `_ALLOWED_AUTH_MODES` lists `basic` | — | Per-profile shared secret for HTTP Basic auth on `/.well-known/est/<pathID>/`. Constant-time comparison via `crypto/subtle`. |
+| `CERTCTL_EST_PROFILE_<NAME>_MTLS_ENABLED` | No | `false` | Publish `/.well-known/est-mtls/<pathID>/` alongside the standard route. |
+| `CERTCTL_EST_PROFILE_<NAME>_MTLS_CLIENT_CA_TRUST_BUNDLE_PATH` | When `_MTLS_ENABLED=true` | — | PEM bundle of CAs that may sign client certs. Preflight refuses missing/empty/expired bundles. SIGHUP-reloadable via the shared `internal/trustanchor.Holder` primitive. |
+| `CERTCTL_EST_PROFILE_<NAME>_CHANNEL_BINDING_REQUIRED` | No | `false` | Enforce RFC 9266 `tls-exporter` channel binding on the mTLS route. Refused at boot when `_MTLS_ENABLED=false`. Requires TLS 1.3. |
+| `CERTCTL_EST_PROFILE_<NAME>_RATE_LIMIT_PER_PRINCIPAL_24H` | No | `0` (disabled) | Sliding-window cap on enrollments per `(CSR.Subject.CN, sourceIP)` pair in any rolling 24h window. Production deploys typically set `3`. |
+| `CERTCTL_EST_PROFILE_<NAME>_SERVERKEYGEN_ENABLED` | No | `false` | Publish `POST /.well-known/est/<pathID>/serverkeygen` per RFC 7030 §4.4 (server generates the keypair, returns multipart/mixed with cert + CMS-EnvelopedData-wrapped private key). |
+
+See [`est.md`](../protocols/est.md) for the full operator guide — multi-profile setup, WiFi/802.1X + FreeRADIUS recipe, IoT bootstrap recipe, troubleshooting matrix per typed audit-action code, and the threat-model carve-outs (server-keygen heap-residency window, source-IP limiter process-locality, mTLS cross-profile bleed defense).
+
+**SCEP RA cert + key (post-2026-04-29):** the SCEP server's RFC 8894 path requires an RA cert/key pair (`CERTCTL_SCEP_RA_CERT_PATH` + `CERTCTL_SCEP_RA_KEY_PATH`, mode 0600) — clients encrypt their CSR to the RA cert's public key per RFC 8894 §3.2.2. Multi-profile deployments configure per-profile pairs via `CERTCTL_SCEP_PROFILES=corp,iot` + `CERTCTL_SCEP_PROFILE_<NAME>_RA_*_PATH`. See [`legacy-est-scep.md`](../protocols/scep-server.md#scep-rfc-8894-native-implementation-post-2026-04-29) for the openssl recipe + ChromeOS Admin Console pointer + must-staple per-profile policy.
+
+#### Multi-profile SCEP dispatch
+
+A single certctl deploy can publish multiple SCEP endpoints — one per fleet, one per device class, or one per Connector — by setting `CERTCTL_SCEP_PROFILES=<comma-separated>` and a matching set of `CERTCTL_SCEP_PROFILE_<NAME>_*` environment variables. The router publishes `/scep/<pathID>?operation=...` for every profile whose `<NAME>` appears in the list (or `/scep` for the legacy single-profile shape when `CERTCTL_SCEP_PROFILES` is unset). Each profile carries its OWN issuer binding, RA cert/key pair, challenge password, must-staple policy, optional mTLS sibling route, and optional Microsoft Intune Connector trust anchor — heterogeneous fleets share one server, distinct credentials.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `CERTCTL_SCEP_PROFILES` | No | — | Comma-separated profile names (e.g. `corp,iot`). When unset, the legacy single-profile config (`CERTCTL_SCEP_*` without the `_PROFILE_<NAME>_` infix) is used. |
+| `CERTCTL_SCEP_PROFILE_<NAME>_ISSUER_ID` | Yes | — | Issuer connector ID this profile dispatches to (e.g. `iss-local`, `iss-ejbca-corp`). |
+| `CERTCTL_SCEP_PROFILE_<NAME>_PROFILE_ID` | No | — | Optional certificate profile ID for fine-grained issuance policy. |
+| `CERTCTL_SCEP_PROFILE_<NAME>_CHALLENGE_PASSWORD` | No | — | Static challenge password for the legacy SCEP auth path. Set to "" when only Intune dynamic challenges are expected. |
+| `CERTCTL_SCEP_PROFILE_<NAME>_RA_CERT_PATH` | Yes | — | RA cert PEM path (mode 0600 enforced). |
+| `CERTCTL_SCEP_PROFILE_<NAME>_RA_KEY_PATH` | Yes | — | RA private key PEM path (mode 0600 enforced). |
+
+See [`legacy-est-scep.md`](../protocols/scep-server.md#scep-rfc-8894-native-implementation-post-2026-04-29) for the full per-profile env-var list and the mTLS / Intune extensions.
+
+#### SCEP mTLS sibling route (opt-in)
+
+For deploys that already have a previously-issued certctl client cert and want a stronger renewal binding than the static challenge password, certctl exposes an opt-in mTLS sibling route at `/scep-mtls/<pathID>`. The TLS handshake is configured with `tls.VerifyClientCertIfGiven` against an operator-supplied trust bundle; presented client certs are validated against the bundle before the SCEP handler runs. The standard `/scep/<pathID>` route stays open for new-enrollment devices that don't yet have a client cert.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `CERTCTL_SCEP_PROFILE_<NAME>_MTLS_ENABLED` | No | `false` | Set `true` to publish `/scep-mtls/<pathID>` alongside `/scep/<pathID>`. |
+| `CERTCTL_SCEP_PROFILE_<NAME>_MTLS_CLIENT_CA_TRUST_BUNDLE_PATH` | When MTLS enabled | — | PEM bundle of CAs that may sign client certs. Preflight refuses a missing/empty bundle. |
+
+See [`legacy-est-scep.md`](../protocols/scep-server.md#scep-mtls-sibling-route-phase-65) for the operator recipe + threat-model rationale.
+
+#### Microsoft Intune Certificate Connector dispatcher
+
+When a profile has `CERTCTL_SCEP_PROFILE_<NAME>_INTUNE_ENABLED=true`, certctl validates the Microsoft Intune Certificate Connector's signed-challenge JWS natively as a drop-in NDES replacement (the Intune Connector documents itself as RFC 8894-conformant and works against any RFC 8894 SCEP server). The dispatcher walks parse → JWS signature verify (RS256 + ES256, alg=none rejected) → version dispatch → time bounds with ±tolerance → audience pin → CSR ↔ claim binding → replay cache → per-device rate limit → optional V3-Pro device-state hook. The trust anchor file is reloaded on `SIGHUP` (operator rotates the on-disk PEM, then `kill -HUP <certctl-pid>`); a parse failure during reload keeps the OLD pool so a half-rotation doesn't take Intune down.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `CERTCTL_SCEP_PROFILE_<NAME>_INTUNE_ENABLED` | No | `false` | Gate the dispatcher. |
+| `CERTCTL_SCEP_PROFILE_<NAME>_INTUNE_CONNECTOR_CERT_PATH` | When enabled | — | PEM bundle of the Connector's signing certs. Preflight refuses a missing/expired bundle. |
+| `CERTCTL_SCEP_PROFILE_<NAME>_INTUNE_AUDIENCE` | No | — | Expected `aud` claim (typically the public SCEP URL the Connector calls). Empty disables the audience check. |
+| `CERTCTL_SCEP_PROFILE_<NAME>_INTUNE_CHALLENGE_VALIDITY` | No | `60m` | Defense-in-depth cap on top of the challenge's own `exp`. |
+| `CERTCTL_SCEP_PROFILE_<NAME>_INTUNE_CLOCK_SKEW_TOLERANCE` | No | `60s` | ±tolerance on iat/exp checks. Raise on poorly-NTP-synced fleets, lower to enforce strict time. Refused at boot when ≥ `INTUNE_CHALLENGE_VALIDITY`. |
+| `CERTCTL_SCEP_PROFILE_<NAME>_INTUNE_PER_DEVICE_RATE_LIMIT_24H` | No | `3` | Max enrollments per `(claim.Subject, claim.Issuer)` in any rolling 24h window. Zero disables. |
+
+See [`scep-intune.md`](../protocols/scep-intune.md) for the full deployment guide — NDES + EJBCA migration playbook, Intune SCEP profile field mapping, trust-anchor extraction recipe, monitoring + Prometheus alert thresholds, and the Microsoft Learn citations operators paste into procurement-team requests.
+
+#### SCEP probe in network scanner
+
+The Network Scans GUI surface includes a one-click "Probe SCEP" form that runs a capability + posture check against any reachable SCEP server URL — `GetCACaps` + `GetCACert` (NEVER `PKCSReq`) so the probe is read-only and safe to run against production endpoints. Result fields surface advertised caps (POSTPKIOperation, SHA-256, SHA-512, AES, SCEPStandard, Renewal), CA cert subject + issuer + algorithm + days-to-expiry + chain length, and a probe duration. Results persist to `scep_probe_results` (migration `000021`) and the probe history is paginated under `GET /api/v1/network-scan/scep-probes`. Useful for pre-migration assessment ("what does the existing NDES advertise?") and posture review.
+
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `POST /api/v1/network-scan/scep-probe` | Bearer | Body `{"url":"https://..."}`. Synchronous probe; returns `SCEPProbeResult`. |
+| `GET /api/v1/network-scan/scep-probes` | Bearer | Recent probe history, paginated `[1, 200]`. |
+
+The probe goes through the same dual-layer SSRF defense (`validation.ValidateSafeURL` up-front + `SafeHTTPDialContext` at dial time) as the rest of the network scanner. Standalone CLI binary is explicitly deferred — the in-tree network scanner is the only entrypoint today.
+
+### Built-in: Vault PKI
+
+The Vault PKI connector integrates with HashiCorp Vault's PKI secrets engine using its native `/sign` API with token-based authentication. This is ideal for organizations using Vault as their internal certificate authority — synchronous issuance without the complexity of ACME or challenge solving.
+
+**Configuration:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CERTCTL_VAULT_ADDR` | — | Vault server address (e.g., `https://vault.internal:8200`) |
+| `CERTCTL_VAULT_TOKEN` | — | Vault auth token with permissions on the PKI mount |
+| `CERTCTL_VAULT_MOUNT` | `pki` | PKI secrets engine mount path |
+| `CERTCTL_VAULT_ROLE` | — | PKI role name for certificate signing |
+| `CERTCTL_VAULT_TTL` | `8760h` | Certificate validity period (TTL) |
+
+The connector is registered in the issuer registry under `iss-vault`. Vault issues certificates synchronously via the `/v1/{mount}/sign/{role}` API with `X-Vault-Token` header authentication. The issued certificate is parsed to extract serial number, validity dates, and chain information.
+
+**Note:** CRL and OCSP are managed by Vault itself. Clients should validate certificate status against Vault's own CRL/OCSP endpoints (`GET /v1/{mount}/crl` and Vault's OCSP responder). certctl does not generate local CRL/OCSP for Vault-issued certificates. Revocation is recorded locally but Vault is the authoritative source.
+
+**MaxTTL enforcement (M11c):** When a certificate profile defines a maximum TTL, the Vault connector overrides the TTL string in the signing request to ensure the issued certificate does not exceed the profile limit. This is applied before Vault's own role-level max TTL.
+
+**Token TTL + automatic renewal (Top-10 fix #5, 2026-05-03 audit):** certctl-server periodically calls `POST /v1/auth/token/renew-self` at half the token's TTL to keep the integration alive without manual rotation; the cadence is read from a one-shot `lookup-self` at startup and re-derived on every successful renewal so a short bootstrap token that gets renewed up to a longer Max TTL shifts to the longer cadence automatically. The renewal loop emits the `certctl_vault_token_renewals_total{result="success"|"failure"|"not_renewable"}` Prometheus counter so operators see expiry trouble in Grafana before issuance breaks. When Vault returns `renewable: false` (configured Max TTL reached), the loop logs a WARN, increments `{result="not_renewable"}`, and exits — the operator must rotate the Vault token and restart certctl-server (or use the GUI/MCP issuer-update path to swap the token in place; the registry's Rebuild path re-Starts the lifecycle on the new connector). Per-tick failures (e.g. transient 5xx, brief network blips) bump `{result="failure"}` and the loop keeps ticking; only the explicit `renewable: false` case stops it.
+
+Location: `internal/connector/issuer/vault/vault.go` + `internal/connector/issuer/vault/vault_renew.go`
+
+### Built-in: DigiCert CertCentral
+
+The DigiCert connector integrates with DigiCert's CertCentral REST API for ordering and managing certificates from DigiCert's commercial CA. It supports both Domain Validated (DV) and Organization/Extended Validated (OV/EV) certificates, with async order processing.
+
+**Configuration:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CERTCTL_DIGICERT_API_KEY` | — | DigiCert API key (X-DC-DEVKEY header) |
+| `CERTCTL_DIGICERT_ORG_ID` | — | DigiCert organization ID |
+| `CERTCTL_DIGICERT_PRODUCT_TYPE` | `ssl_basic` | Certificate product (e.g., `ssl_basic`, `ssl_plus`, `ssl_ev`) |
+| `CERTCTL_DIGICERT_BASE_URL` | `https://www.digicert.com/services/v2` | DigiCert API base URL |
+| `CERTCTL_DIGICERT_POLL_MAX_WAIT_SECONDS` | `600` | Bounded-polling deadline for `GetOrderStatus`. See [docs/reference/protocols/async-ca-polling.md](../protocols/async-ca-polling.md). |
+
+The connector submits certificate orders to DigiCert's `/order/certificate/create` API. DV certificates may issue immediately; OV/EV certificates require validation (handled by DigiCert) and poll-based completion. `GetOrderStatus` runs bounded internal polling (5s/15s/45s/2m/5m capped, ±20% jitter, default 10-minute deadline) — see [async-polling.md](../protocols/async-ca-polling.md).
+
+**Authentication:** API key passed via `X-DC-DEVKEY` header, with organization ID in request body.
+
+**Note:** CRL and OCSP are managed by DigiCert. Clients should validate certificate status against DigiCert's infrastructure. certctl records the revocation locally but does not notify DigiCert for revocation — use DigiCert's dashboard for revocation management.
+
+Location: `internal/connector/issuer/digicert/digicert.go`
+
+### Built-in: Sectigo SCM
+
+The Sectigo connector integrates with Sectigo Certificate Manager's REST API for ordering and managing DV, OV, and EV certificates. Like DigiCert, it uses an async order model: submit an enrollment, receive an sslId, then poll for completion.
+
+**Configuration:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CERTCTL_SECTIGO_CUSTOMER_URI` | — | Sectigo customer URI (organization identifier) |
+| `CERTCTL_SECTIGO_LOGIN` | — | API account login |
+| `CERTCTL_SECTIGO_PASSWORD` | — | API account password |
+| `CERTCTL_SECTIGO_ORG_ID` | — | Organization ID (integer) |
+| `CERTCTL_SECTIGO_CERT_TYPE` | — | Certificate type ID (integer, from `/ssl/v1/types`) |
+| `CERTCTL_SECTIGO_TERM` | `365` | Certificate validity in days |
+| `CERTCTL_SECTIGO_BASE_URL` | `https://cert-manager.com/api` | Sectigo API base URL |
+| `CERTCTL_SECTIGO_POLL_MAX_WAIT_SECONDS` | `600` | Bounded-polling deadline for `GetOrderStatus`. The `collectNotReady` sentinel (cert approved but not yet retrievable) rides the same backoff schedule. See [docs/reference/protocols/async-ca-polling.md](../protocols/async-ca-polling.md). |
+
+The connector submits certificate enrollments to Sectigo's `/ssl/v1/enroll` API. DV certificates may issue immediately; OV/EV certificates require validation (handled by Sectigo) and poll-based completion. `GetOrderStatus` runs bounded internal polling — see [async-polling.md](../protocols/async-ca-polling.md).
+
+**Authentication:** Three custom headers on every request — `customerUri`, `login`, and `password`.
+
+**Note:** CRL and OCSP are managed by Sectigo. certctl records revocations locally and notifies Sectigo via `/ssl/v1/revoke/{sslId}`.
+
+Location: `internal/connector/issuer/sectigo/sectigo.go`
+
+### Built-in: Google CAS
+
+Google Cloud Certificate Authority Service — managed private CA on GCP. Synchronous issuance via CAS REST API with OAuth2 service account auth.
+
+| Setting | Required | Default | Description |
+|---------|----------|---------|-------------|
+| `CERTCTL_GOOGLE_CAS_PROJECT` | Yes | — | GCP project ID |
+| `CERTCTL_GOOGLE_CAS_LOCATION` | Yes | — | GCP region (e.g., `us-central1`) |
+| `CERTCTL_GOOGLE_CAS_CA_POOL` | Yes | — | CA pool name |
+| `CERTCTL_GOOGLE_CAS_CREDENTIALS` | Yes | — | Path to service account JSON |
+| `CERTCTL_GOOGLE_CAS_TTL` | No | `8760h` | Default certificate TTL |
+
+**Authentication:** OAuth2 service account. The connector reads a service account JSON file, signs a JWT with the private key, and exchanges it for an access token at Google's token endpoint. Tokens are cached and refreshed automatically (5 min before expiry).
+
+**Note:** CRL and OCSP are managed by Google CAS directly. certctl records revocations locally and notifies Google CAS via the revoke endpoint.
+
+Location: `internal/connector/issuer/googlecas/googlecas.go`
+
+### Built-in: AWS ACM Private CA
+
+AWS Certificate Manager Private Certificate Authority — managed private CA on AWS. Synchronous-via-waiter issuance: the connector calls `IssueCertificate` (which is asynchronous at the ACM PCA API level), then runs the SDK's `NewCertificateIssuedWaiter` until the cert reaches `CERTIFICATE_ISSUED` state, then `GetCertificate` to retrieve the PEM. Default waiter timeout is 5 minutes; tune by editing `defaultWaiterTimeout` in the connector.
+
+| Setting | Required | Default | Description |
+|---------|----------|---------|-------------|
+| `CERTCTL_AWS_PCA_REGION` | Yes | — | AWS region (e.g., `us-east-1`) |
+| `CERTCTL_AWS_PCA_CA_ARN` | Yes | — | ARN of the ACM Private CA |
+| `CERTCTL_AWS_PCA_SIGNING_ALGORITHM` | No | `SHA256WITHRSA` | Signing algorithm |
+| `CERTCTL_AWS_PCA_VALIDITY_DAYS` | No | `365` | Certificate validity in days |
+| `CERTCTL_AWS_PCA_TEMPLATE_ARN` | No | — | Optional certificate template ARN |
+
+**Supported signing algorithms:** SHA256WITHRSA, SHA384WITHRSA, SHA512WITHRSA, SHA256WITHECDSA, SHA384WITHECDSA, SHA512WITHECDSA.
+
+**Authentication:** Standard AWS credential chain via `aws-sdk-go-v2/config.LoadDefaultConfig()`. Resolves credentials in this order: environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`), shared config files (`~/.aws/config`, `~/.aws/credentials`, profile via `AWS_PROFILE`), IAM Roles for Service Accounts (EKS), EC2 instance profiles, ECS task roles, and SSO. certctl never stores AWS credentials directly — set them in the certctl process's environment or via the IAM role attached to the host.
+
+**Minimal IAM policy.** The IAM principal that certctl authenticates as needs the following actions against the CA's ARN:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "acm-pca:IssueCertificate",
+        "acm-pca:GetCertificate",
+        "acm-pca:RevokeCertificate",
+        "acm-pca:GetCertificateAuthorityCertificate"
+      ],
+      "Resource": "arn:aws:acm-pca:us-east-1:123456789012:certificate-authority/12345678-1234-1234-1234-123456789012"
+    }
+  ]
+}
+```
+
+Replace the `Resource` ARN with your own CA ARN. If you use a `TemplateArn` (subordinate-CA template), the policy needs no additional permissions — `IssueCertificate` covers it.
+
+**Worked example.** Add an AWSACMPCA issuer via the API:
+
+```bash
+curl -k -X POST https://localhost:8443/api/v1/issuers \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "id": "iss-aws-prod",
+    "name": "AWS ACM PCA (prod)",
+    "type": "AWSACMPCA",
+    "config": {
+      "region": "us-east-1",
+      "ca_arn": "arn:aws:acm-pca:us-east-1:123456789012:certificate-authority/12345678-1234-1234-1234-123456789012",
+      "signing_algorithm": "SHA256WITHRSA",
+      "validity_days": 90
+    }
+  }'
+```
+
+The certctl server process must have AWS credentials available before the issuer is created (or before any subsequent issuance call). For a local dev run with shared-config creds: `export AWS_PROFILE=my-profile` before `docker compose up`. For an EKS deployment: attach an IRSA-bound IAM role to the certctl pod's service account.
+
+**Troubleshooting.**
+
+- **`AccessDeniedException: User ... is not authorized to perform: acm-pca:IssueCertificate`** — the IAM principal certctl is using lacks the required actions. Apply the IAM policy above (scoped to your CA ARN) to the role/user. The principal can be inspected with `aws sts get-caller-identity` from the certctl host.
+- **`ResourceNotFoundException: Could not find Certificate Authority`** — the `CAArn` doesn't match any CA in the configured region. Common causes: region mismatch (CA is in `us-west-2`, certctl region is set to `us-east-1`), CA was deleted, ARN typo. Verify with `aws acm-pca describe-certificate-authority --certificate-authority-arn <arn> --region <region>`.
+- **`acmpca waiter (waiting for issuance): exceeded max wait time`** — the cert was submitted but didn't reach `CERTIFICATE_ISSUED` state within 5 minutes. Check the CA's CloudWatch metrics for backlog; check the CA's audit reports for any policy violations on the request. If the wait is consistently slow, edit `defaultWaiterTimeout` in `internal/connector/issuer/awsacmpca/awsacmpca.go` and rebuild.
+
+**Note:** CRL and OCSP are managed by AWS ACM PCA directly. certctl records revocations locally and notifies AWS via the `RevokeCertificate` API with RFC 5280 reason mapping (e.g., `keyCompromise` → `KEY_COMPROMISE`). AWS ACM PCA's CRL distribution point and OCSP responder serve the resulting status to verifying clients; certctl is not in the OCSP path for this connector.
+
+Location: `internal/connector/issuer/awsacmpca/awsacmpca.go`
+
+### Built-in: Entrust Certificate Services
+
+Entrust CA Gateway REST API with mutual TLS (mTLS) client certificate authentication. Supports synchronous issuance (200 OK with PEM) and approval-pending flows (201 Accepted with async polling).
+
+| Setting | Required | Default | Description |
+|---------|----------|---------|-------------|
+| `CERTCTL_ENTRUST_API_URL` | Yes | — | Entrust CA Gateway base URL |
+| `CERTCTL_ENTRUST_CLIENT_CERT_PATH` | Yes | — | Path to mTLS client certificate PEM |
+| `CERTCTL_ENTRUST_CLIENT_KEY_PATH` | Yes | — | Path to mTLS client private key PEM |
+| `CERTCTL_ENTRUST_CA_ID` | Yes | — | Certificate Authority ID (from `GET /certificate-authorities`) |
+| `CERTCTL_ENTRUST_PROFILE_ID` | No | — | Optional enrollment profile ID |
+| `CERTCTL_ENTRUST_POLL_MAX_WAIT_SECONDS` | No | `600` (10m) | Bounded-polling deadline for `GetOrderStatus`. Approval-pending workflows where humans approve enrollments should bump to `86400` (24h) so a single tick can wait through the approval window. See [docs/reference/protocols/async-ca-polling.md](../protocols/async-ca-polling.md). |
+
+**Authentication:** Mutual TLS — the client certificate and key are loaded via `tls.LoadX509KeyPair()` and attached to the HTTP transport. No API key or token required.
+
+**Issuance model:** Enrollment via `POST /v1/certificate-authorities/{caId}/enrollments`. Returns 200 with PEM immediately for auto-approved enrollments, or 201 Accepted with a tracking ID for approval-pending orders. `GetOrderStatus` polls the enrollment endpoint.
+
+**Note:** CRL and OCSP are managed by Entrust. certctl records revocations locally and notifies Entrust via `PUT /v1/certificate-authorities/{caId}/certificates/{serial}/revoke`.
+
+**mTLS keypair caching (audit fix #10):** The parsed client certificate plus a precomputed `*http.Transport` are cached on the connector after the first API call. Steady-state calls reuse the cached transport — no per-call disk read or `tls.X509KeyPair` parse. Rotation is picked up automatically via mtime polling: when the cert file's mtime advances beyond the last-loaded value, the next API call re-parses and rebuilds the transport. Operator workflow: `mv -f new.crt /etc/certctl/entrust/client.crt` (mtime changes), no process restart required, takes effect on the next API call. `os.Stat` errors during rotation surface as connector errors rather than silently serving stale credentials.
+
+Location: `internal/connector/issuer/entrust/entrust.go` (cache shared at `internal/connector/issuer/mtlscache/`).
+
+### Built-in: GlobalSign Atlas HVCA
+
+GlobalSign Atlas High Volume CA REST API with dual authentication: mTLS for the TLS handshake and API key/secret headers for request authorization. Region-aware base URLs (EMEA, APAC, Americas).
+
+| Setting | Required | Default | Description |
+|---------|----------|---------|-------------|
+| `CERTCTL_GLOBALSIGN_API_URL` | Yes | — | Atlas HVCA API URL (region-specific) |
+| `CERTCTL_GLOBALSIGN_API_KEY` | Yes | — | API key for request authentication |
+| `CERTCTL_GLOBALSIGN_API_SECRET` | Yes | — | API secret for request authentication |
+| `CERTCTL_GLOBALSIGN_CLIENT_CERT_PATH` | Yes | — | Path to mTLS client certificate PEM |
+| `CERTCTL_GLOBALSIGN_CLIENT_KEY_PATH` | Yes | — | Path to mTLS client private key PEM |
+| `CERTCTL_GLOBALSIGN_SERVER_CA_PATH` | No | system trust store | PEM bundle used to verify the Atlas API server certificate. Set this for private/lab Atlas deployments whose server TLS chain is not in the host's default trust bundle. |
+| `CERTCTL_GLOBALSIGN_POLL_MAX_WAIT_SECONDS` | No | `600` (10m) | Bounded-polling deadline for `GetOrderStatus`. GlobalSign tracks orders by serial number rather than order ID; the polling shape is identical. See [docs/reference/protocols/async-ca-polling.md](../protocols/async-ca-polling.md). |
+
+**Authentication:** Dual — mTLS client certificate for TLS handshake plus `X-API-Key` and `X-API-Secret` headers on every request.
+
+**TLS verification:** The connector always verifies the server certificate. When `server_ca_path` is set, the PEM bundle at that path is used as the trust anchor; otherwise the host's system trust store is used. TLS 1.2 is the minimum protocol version.
+
+**Issuance model:** `POST /v2/certificates` returns a serial number. Certificate PEM is available after validation completes. Typically resolves within seconds for DV. `GetOrderStatus` polls the certificate endpoint.
+
+**Note:** CRL and OCSP are managed by GlobalSign. certctl records revocations locally and notifies GlobalSign via `PUT /v2/certificates/{serial}/revoke`.
+
+**mTLS keypair caching (audit fix #10):** The parsed client certificate plus a precomputed `*http.Transport` (with `ServerCAPath` pinning preserved when configured) are cached on the connector after the first API call. Steady-state calls reuse the cached transport — no per-call disk read or `tls.X509KeyPair` parse. Rotation is picked up automatically via mtime polling: when the cert file's mtime advances beyond the last-loaded value, the next API call re-parses and rebuilds the transport. Operator workflow: `mv -f new.crt /etc/certctl/globalsign/client.crt` (mtime changes), no process restart required, takes effect on the next API call. `os.Stat` errors during rotation surface as connector errors rather than silently serving stale credentials.
+
+Location: `internal/connector/issuer/globalsign/globalsign.go` (cache shared at `internal/connector/issuer/mtlscache/`).
+
+### Built-in: EJBCA (Keyfactor)
+
+EJBCA REST API for self-hosted open-source and enterprise CAs. Supports dual authentication: mTLS (default) or OAuth2 Bearer token, selectable via configuration.
+
+| Setting | Required | Default | Description |
+|---------|----------|---------|-------------|
+| `CERTCTL_EJBCA_API_URL` | Yes | — | EJBCA REST API base URL |
+| `CERTCTL_EJBCA_AUTH_MODE` | No | `mtls` | Auth mode: `mtls` or `oauth2` |
+| `CERTCTL_EJBCA_CLIENT_CERT_PATH` | mTLS | — | Path to client certificate PEM (mTLS mode) |
+| `CERTCTL_EJBCA_CLIENT_KEY_PATH` | mTLS | — | Path to client key PEM (mTLS mode) |
+| `CERTCTL_EJBCA_TOKEN` | OAuth2 | — | Bearer token (oauth2 mode) |
+| `CERTCTL_EJBCA_CA_NAME` | Yes | — | EJBCA CA name |
+| `CERTCTL_EJBCA_CERT_PROFILE` | No | — | EJBCA certificate profile |
+| `CERTCTL_EJBCA_EE_PROFILE` | No | — | EJBCA end-entity profile |
+
+**Authentication:** Configurable via `auth_mode`. In mTLS mode, client certificate and key are loaded for the TLS handshake. In OAuth2 mode, the token is sent as `Authorization: Bearer {token}`.
+
+**Issuance model:** `POST /v1/certificate/pkcs10enroll` with base64-encoded CSR. Returns base64-encoded certificate PEM. EJBCA 9.3+ creates end-entity and issues cert in a single call. Approval-pending enrollments return 201.
+
+**Revocation note:** EJBCA requires both issuer DN and serial number for revocation. The connector stores these as a composite `OrderID` in `issuer_dn::serial` format.
+
+**Note:** CRL and OCSP are managed by the EJBCA instance. certctl records revocations locally and notifies EJBCA via `PUT /v1/certificate/{issuer_dn}/{serial}/revoke`.
+
+Location: `internal/connector/issuer/ejbca/ejbca.go`
+
+### ADCS Integration
+
+Active Directory Certificate Services integration is handled via the **sub-CA mode** of the Local CA issuer, not as a separate connector. certctl operates as a subordinate CA with its signing certificate issued by ADCS, so all certctl-issued certs chain to the enterprise ADCS root. See the Local CA section above.
+
+### Building a Custom Issuer
+
+Here's a simplified example showing the connector pattern (using a hypothetical Vault-like CA):
+
+```go
+package vault
+
+import (
+    "context"
+    "encoding/json"
+    "fmt"
+
+    vaultapi "github.com/hashicorp/vault/api"
+    "github.com/zulufun/certctl-localhost/internal/connector/issuer"
+)
+
+type Config struct {
+    Address  string `json:"address"`
+    Token    string `json:"token"`
+    PKIPath  string `json:"pki_path"`
+    RoleName string `json:"role_name"`
+}
+
+type VaultIssuer struct {
+    config *Config
+    client *vaultapi.Client
+}
+
+func New(cfg *Config) (*VaultIssuer, error) {
+    client, err := vaultapi.NewClient(&vaultapi.Config{Address: cfg.Address})
+    if err != nil {
+        return nil, fmt.Errorf("vault client: %w", err)
+    }
+    client.SetToken(cfg.Token)
+    return &VaultIssuer{config: cfg, client: client}, nil
+}
+
+func (v *VaultIssuer) ValidateConfig(ctx context.Context, config json.RawMessage) error {
+    var cfg Config
+    if err := json.Unmarshal(config, &cfg); err != nil {
+        return fmt.Errorf("invalid config: %w", err)
+    }
+    if cfg.Address == "" || cfg.Token == "" {
+        return fmt.Errorf("address and token are required")
+    }
+    return nil
+}
+
+func (v *VaultIssuer) IssueCertificate(ctx context.Context, req issuer.IssuanceRequest) (*issuer.IssuanceResult, error) {
+    path := fmt.Sprintf("%s/sign/%s", v.config.PKIPath, v.config.RoleName)
+    secret, err := v.client.Logical().Write(path, map[string]interface{}{
+        "common_name": req.CommonName,
+        "alt_names":   req.SANs,
+        "csr":         req.CSRPEM,
+    })
+    if err != nil {
+        return nil, fmt.Errorf("vault sign: %w", err)
+    }
+
+    return &issuer.IssuanceResult{
+        CertPEM:  secret.Data["certificate"].(string),
+        ChainPEM: secret.Data["ca_chain"].(string),
+        Serial:   secret.Data["serial_number"].(string),
+    }, nil
+}
+
+// ... implement RenewCertificate, RevokeCertificate, GetOrderStatus
+```
+
+## ACME Server (Built-in)
+
+certctl ships a built-in RFC 8555 + RFC 9773 ARI ACME **server**
+endpoint at `/acme/profile/<profile-id>/*`. Any RFC 8555 client
+(cert-manager 1.15+, Caddy, Traefik, win-acme, certbot, Posh-ACME)
+integrates with certctl as an ACME issuer with no certctl-side
+modification — closing the "deploy a certctl agent on every K8s node"
+friction that costs deals to external PKI vendors.
+
+This is **distinct** from the [ACME consumer
+connector](#built-in-acme-v2-lets-encrypt-sectigo-zerossl) above. The
+consumer side is `certctl → external CA over ACME`; the server side
+is `external client → certctl over ACME`. Operators deploying both
+should namespace env vars carefully: consumer uses `CERTCTL_ACME_*`
+(`DIRECTORY_URL`, `EMAIL`, `CHALLENGE_TYPE`); server uses
+`CERTCTL_ACME_SERVER_*` (`ENABLED`, `DEFAULT_PROFILE_ID`, `NONCE_TTL`,
+…).
+
+Two auth modes per profile (`certificate_profiles.acme_auth_mode`):
+
+- **`trust_authenticated`** (default for internal PKI). The JWS-
+  authenticated ACME account is trusted to issue for any identifier
+  the profile policy permits; no out-of-band ownership proof. The
+  most common certctl use case — internal-PKI fleets where the
+  network itself is the trust boundary.
+- **`challenge`**. Full HTTP-01 + DNS-01 + TLS-ALPN-01 validation per
+  RFC 8555 §8 + RFC 8737. Required for public-trust-style PKI where
+  account-key compromise must not cost issuance authority.
+
+Routes through `service.CertificateService.Create` so policy + audit
++ metrics + bulk-revocation + cloud-discovery all apply uniformly to
+ACME-issued certs (just as they do to API-issued, agent-issued, EST-
+issued, SCEP-issued certs).
+
+See:
+
+- [ACME Server Reference](../protocols/acme-server.md) — env-var reference,
+  endpoints, auth-mode decision tree, RFC 8555 conformance statement,
+  troubleshooting, FAQ.
+- [cert-manager Walkthrough](../../migration/acme-from-cert-manager.md) — kind
+  → cert-manager → certctl-server → Certificate flow.
+- [Caddy Walkthrough](../../migration/acme-from-caddy.md) — Caddyfile `acme_ca`
+  + trust configuration.
+- [Traefik Walkthrough](../../migration/acme-from-traefik.md) — `certificatesResolvers`
+  + `serversTransport.rootCAs`.
+- [Threat Model](../protocols/acme-server-threat-model.md) — JWS forgery
+  resistance, nonce store integrity, HTTP-01 SSRF, DNS-01 cache
+  posture, TLS-ALPN-01 chain-not-validated rationale, rate-limit
+  tuning, audit trail.
+
+## Target Connector
+
+Target connectors deploy certificates to infrastructure systems. They run on agents, not on the control plane.
+
+### Interface
+
+```go
+// internal/connector/target/interface.go
+package target
+
+type Connector interface {
+    // ValidateConfig checks target configuration
+    ValidateConfig(ctx context.Context, config json.RawMessage) error
+
+    // DeployCertificate pushes a certificate to the target system
+    DeployCertificate(ctx context.Context, request DeploymentRequest) (*DeploymentResult, error)
+
+    // ValidateDeployment verifies a certificate was deployed correctly
+    ValidateDeployment(ctx context.Context, request ValidationRequest) (*ValidationResult, error)
+}
+
+type DeploymentRequest struct {
+    CertPEM      string            // Signed certificate (PEM), from control plane
+    ChainPEM     string            // CA chain (PEM), from control plane
+    KeyPEM       string            // Private key (PEM), from agent's local key store
+    TargetConfig json.RawMessage   // Target-specific config (NGINX paths, F5 API, IIS site)
+    Metadata     map[string]string // Arbitrary context (cert ID, environment, etc.)
+    // NOTE: KeyPEM is populated by the agent from its local key store
+    // (CERTCTL_KEY_DIR). It is NEVER sent from the control plane.
+    // The control plane only provides CertPEM and ChainPEM (public material).
+    // The agent combines the locally-generated private key with the signed
+    // certificate to create the full deployment payload.
+}
+
+type DeploymentResult struct {
+    Success       bool
+    TargetAddress string
+    DeploymentID  string
+    Message       string
+    DeployedAt    time.Time
+    Metadata      map[string]string
+}
+
+type ValidationRequest struct {
+    CertificateID string
+    Serial        string
+    TargetConfig  json.RawMessage
+    Metadata      map[string]string
+}
+
+type ValidationResult struct {
+    Valid        bool
+    Serial       string
+    TargetAddress string
+    Message      string
+    ValidatedAt  time.Time
+    Metadata     map[string]string
+}
+```
+
+### Built-in: NGINX
+
+The NGINX connector writes certificate, chain, and key files to disk, validates the NGINX configuration, and reloads the server. This is a common deployment pattern for teams running NGINX as a reverse proxy or TLS termination point.
+
+Configuration:
+```json
+{
+  "cert_path": "/etc/nginx/certs/cert.pem",
+  "chain_path": "/etc/nginx/certs/chain.pem",
+  "key_path": "/etc/nginx/certs/key.pem",
+  "reload_command": "systemctl reload nginx",
+  "validate_command": "nginx -t"
+}
+```
+
+The deployment flow is designed to be safe and atomic where possible: the connector writes cert and chain files with mode 0644 and the key file with mode 0600 (read-only by owner), runs the validation command first (so a bad config doesn't take down NGINX), and only reloads if validation passes. If the validation command fails, the connector rolls back the file writes and returns an error with the validation output — this prevents a partial deployment from breaking a running NGINX instance.
+
+The `reload_command` defaults to `systemctl reload nginx` but can be overridden for custom setups (e.g., `nginx -s reload` for non-systemd environments, or `docker exec nginx nginx -s reload` for containerized NGINX).
+
+Location: `internal/connector/target/nginx/nginx.go`
+
+### Built-in: Apache httpd
+
+The Apache httpd connector follows the same pattern as NGINX: it writes separate certificate, chain, and key files to disk, validates the Apache configuration with `apachectl configtest`, and performs a graceful reload. The key difference is that private keys are written with 0600 permissions (owner-only read) for security, while cert and chain files use 0644.
+
+Configuration:
+```json
+{
+  "cert_path": "/etc/apache2/ssl/cert.pem",
+  "chain_path": "/etc/apache2/ssl/chain.pem",
+  "key_path": "/etc/apache2/ssl/key.pem",
+  "reload_command": "apachectl graceful",
+  "validate_command": "apachectl configtest"
+}
+```
+
+The `reload_command` can be customized for different environments (e.g., `systemctl reload apache2` for systemd, `httpd -k graceful` for RHEL/CentOS). Validation output is captured and included in error messages for debugging.
+
+Location: `internal/connector/target/apache/apache.go`
+
+### Built-in: HAProxy
+
+The HAProxy connector differs from NGINX and Apache because HAProxy expects all TLS material in a single combined PEM file (certificate + chain + private key concatenated). The connector builds this combined file, writes it with 0600 permissions (since it contains the private key), optionally validates the HAProxy configuration, and reloads.
+
+Configuration:
+```json
+{
+  "pem_path": "/etc/haproxy/certs/site.pem",
+  "reload_command": "systemctl reload haproxy",
+  "validate_command": "haproxy -c -f /etc/haproxy/haproxy.cfg"
+}
+```
+
+The combined PEM is built in this order: server certificate, intermediate/chain certificates, private key. The `validate_command` is optional — if omitted, the connector skips config validation and goes straight to reload.
+
+Location: `internal/connector/target/haproxy/haproxy.go`
+
+### Built-in: Traefik
+
+The Traefik connector uses Traefik's file provider — it writes certificate and key files to a watched directory, and Traefik automatically picks up the changes without any explicit reload command. This is the simplest deployment model: write the files, and Traefik does the rest.
+
+Configuration:
+```json
+{
+  "cert_dir": "/etc/traefik/certs",
+  "cert_file": "site.crt",
+  "key_file": "site.key"
+}
+```
+
+The `cert_dir` is the directory Traefik is configured to watch via its file provider (e.g., `providers.file.directory` in Traefik's static config). The connector writes `cert_file` and `key_file` into this directory with appropriate permissions. Traefik's file watcher detects the change and reloads the TLS configuration automatically.
+
+Location: `internal/connector/target/traefik/traefik.go`
+
+### Built-in: Caddy
+
+The Caddy connector supports two deployment modes — choose based on your Caddy setup:
+
+**API mode (recommended):** Posts the certificate directly to Caddy's admin API (`POST /load` or certificate-specific endpoints) for zero-downtime hot reload. Requires Caddy's admin API to be enabled and accessible from the agent.
+
+**File mode (fallback):** Writes cert and key files to disk, relying on Caddy's built-in file watcher or a manual reload. Use this when the admin API isn't available or when Caddy is configured to read certificates from disk.
+
+Configuration:
+```json
+{
+  "mode": "api",
+  "admin_api": "http://localhost:2019",
+  "cert_dir": "/etc/caddy/certs",
+  "cert_file": "site.crt",
+  "key_file": "site.key"
+}
+```
+
+When `mode` is `"api"`, the connector posts the certificate to the admin API endpoint. When `mode` is `"file"`, it writes files to `cert_dir` (same pattern as Traefik). The `admin_api` field is ignored in file mode.
+
+Location: `internal/connector/target/caddy/caddy.go`
+
+### Built-in: Envoy
+
+The Envoy connector uses file-based certificate delivery — it writes certificate and key files to a directory that Envoy watches via its SDS (Secret Discovery Service) file-based configuration or static `filename` references in the bootstrap config. When files change, Envoy automatically picks up the new certificates without requiring a reload command.
+
+Configuration:
+```json
+{
+  "cert_dir": "/etc/envoy/certs",
+  "cert_filename": "cert.pem",
+  "key_filename": "key.pem",
+  "chain_filename": "chain.pem",
+  "sds_config": true
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `cert_dir` | string | (required) | Directory where Envoy watches for certificate files |
+| `cert_filename` | string | `cert.pem` | Filename for the certificate (leaf + chain unless `chain_filename` is set) |
+| `key_filename` | string | `key.pem` | Filename for the private key |
+| `chain_filename` | string | (empty) | If set, chain is written to a separate file instead of appended to the cert |
+| `sds_config` | bool | `false` | If true, writes an `sds.json` file for Envoy's file-based SDS provider |
+
+When `sds_config` is `true`, the connector writes an SDS JSON file (`{cert_dir}/sds.json`) containing a `tls_certificate` resource that points to the cert and key file paths. Envoy's file-based SDS (`path_config_source`) watches this file for changes, providing automatic hot-reload of certificates. This is the recommended approach for production Envoy deployments using dynamic TLS configuration.
+
+When `sds_config` is `false` (the default), the connector simply writes cert and key files. Use this mode when Envoy's bootstrap config references the cert/key files directly via static `filename` fields in the TLS context.
+
+Location: `internal/connector/target/envoy/envoy.go`
+
+### Built-in: Postfix / Dovecot
+
+The Postfix/Dovecot connector is a dual-mode mail server TLS connector. It writes certificate, key, and chain files to configured paths and reloads the mail service. The `mode` field selects between Postfix MTA and Dovecot IMAP/POP3, which determines default file paths and reload commands.
+
+This connector pairs with certctl's S/MIME certificate support (email protection EKU, email SAN routing) for a complete email infrastructure story — TLS for transport encryption, S/MIME for end-to-end message signing and encryption.
+
+**Postfix configuration:**
+```json
+{
+  "mode": "postfix",
+  "cert_path": "/etc/postfix/certs/cert.pem",
+  "key_path": "/etc/postfix/certs/key.pem",
+  "chain_path": "/etc/postfix/certs/chain.pem",
+  "reload_command": "postfix reload",
+  "validate_command": "postfix check"
+}
+```
+
+**Dovecot configuration:**
+```json
+{
+  "mode": "dovecot",
+  "cert_path": "/etc/dovecot/certs/cert.pem",
+  "key_path": "/etc/dovecot/certs/key.pem",
+  "chain_path": "/etc/dovecot/certs/chain.pem",
+  "reload_command": "doveadm reload",
+  "validate_command": "doveconf -n"
+}
+```
+
+| Field | Type | Default (Postfix) | Default (Dovecot) | Description |
+|-------|------|-------------------|-------------------|-------------|
+| `mode` | string | `postfix` | `dovecot` | Service mode — determines defaults |
+| `cert_path` | string | `/etc/postfix/certs/cert.pem` | `/etc/dovecot/certs/cert.pem` | Path for certificate file |
+| `key_path` | string | `/etc/postfix/certs/key.pem` | `/etc/dovecot/certs/key.pem` | Path for private key (0600 permissions) |
+| `chain_path` | string | (empty) | (empty) | If set, chain written separately; otherwise appended to cert |
+| `reload_command` | string | `postfix reload` | `doveadm reload` | Command to reload the mail service |
+| `validate_command` | string | `postfix check` | `doveconf -n` | Optional config validation before reload |
+
+All commands are validated against shell injection via `validation.ValidateShellCommand()`. File permissions: cert/chain 0644, key 0600.
+
+Location: `internal/connector/target/postfix/postfix.go`
+
+#### Choosing Mode=postfix vs Mode=dovecot
+
+The connector supports two modes via the `mode` config field, switching the daemon-specific defaults. **Both modes share the same Go connector code** (atomic-write, PreCommit/PostCommit hooks, post-deploy verify, rollback), so the rollback contract is identical across modes.
+
+**Choose `mode: postfix` when** your target host runs Postfix as the MTA (typically port 25 SMTP/STARTTLS, 465 SMTPS, or 587 submission). Defaults applied by `applyDefaults` (see `internal/connector/target/postfix/postfix.go`):
+
+| Default | Value |
+|---|---|
+| `cert_path` | `/etc/postfix/certs/cert.pem` |
+| `key_path` | `/etc/postfix/certs/key.pem` |
+| `validate_command` | `postfix check` |
+| `reload_command` | `postfix reload` |
+
+`mode: postfix` is also the **default when `mode` is unset**.
+
+**Choose `mode: dovecot` when** your target host runs Dovecot as the IMAPS / POP3S server (typically port 993 IMAPS or 995 POP3S). Defaults applied by `applyDefaults`:
+
+| Default | Value |
+|---|---|
+| `cert_path` | `/etc/dovecot/certs/cert.pem` |
+| `key_path` | `/etc/dovecot/certs/key.pem` |
+| `validate_command` | `doveconf -n` |
+| `reload_command` | `doveadm reload` |
+
+**Post-deploy TLS verify** is operator-supplied via `post_deploy_verify` (`enabled` + `endpoint` + `timeout`) — the connector does NOT bake in a per-mode default port. Operators that opt in should set `endpoint` to their daemon's listener (e.g. `mail.example.com:25` for Postfix STARTTLS, `mail.example.com:993` for Dovecot IMAPS).
+
+**Hosts running BOTH Postfix and Dovecot** (the common mail-server pattern): configure **two separate targets** in the certctl control plane, one per daemon. Each gets its own cert path, its own validate/reload command, and its own optional verify endpoint. The cert + key bytes can be identical across the two targets if your mail server uses the same TLS material for both daemons (which many do); certctl does not deduplicate the deploys, but the byte-equal cert hits the SHA-256 idempotency short-circuit on subsequent renewals when the target paths haven't changed.
+
+**Sharing a single cert file across daemons** via a filesystem symlink works fine with the connector — the atomic-write path's `os.Rename` follows symlinks. Configure both targets to point at the same canonical path, or have one target's `cert_path` symlink into the other's. Operators who want byte-deduplication should rely on this approach rather than asking certctl to coordinate it.
+
+**Daemon-specific quirks worth knowing:**
+
+- **Postfix STARTTLS** (port 25) typically requires the cert to chain to a public root for receiving mail from arbitrary external MTAs that validate SMTP-side server certs. If you're deploying a self-signed cert from `iss-local`, configure the receiving Postfix accordingly (e.g. `smtpd_use_tls=yes` + `smtpd_tls_security_level=may` for opportunistic TLS so external senders that don't validate continue to deliver).
+- **Dovecot IMAPS** (port 993) is typically client-facing — the chain you ship matters more here because IMAPS clients (Thunderbird, Outlook) actively validate. Set `chain_path` if your certificate chain is supplied separately; when `chain_path` is unset, the connector appends the chain bytes to `cert_path`.
+- **Postfix and Dovecot do not share a TLS session cache** by default. Both reload independently, so a cert renewal that updates both targets via certctl requires both reloads to succeed before clients re-handshake. The two targets are fully independent in the certctl scheduler — one reload failing rolls back that target only.
+
+**Test pin**: Bundle 11 (commit `88e8881`) added end-to-end tests for `Mode=dovecot`:
+
+- `TestPostfix_Atomic_DovecotMode_HappyPath` — confirms `applyDefaults` populates the dovecot validate + reload commands AND the deploy threads them through to `runValidate` + `runReload`.
+- `TestPostfix_Atomic_DovecotMode_VerifyFails_Rollback` — confirms the rollback path under `Mode=dovecot` restores pre-deploy cert + key bytes byte-exact.
+
+The `Mode=postfix` branch has equivalent test coverage in the same file (see `TestPostfix_HappyPath`, `TestPostfix_VerifyMismatch_Rollback`, `TestPostfix_ReloadFails_Rollback`).
+
+### F5 BIG-IP (Implemented)
+
+The F5 BIG-IP target connector deploys certificates to F5 load balancers via the iControl REST API. F5 appliances can't run agents directly, so this connector uses the **proxy agent pattern**: a designated certctl agent in the same network zone polls for F5 deployment jobs and executes iControl REST calls on behalf of the control plane. Minimum supported BIG-IP version: 12.0+.
+
+The deployment flow uses F5's transaction API for atomic updates: authenticate via token auth, upload cert/key/chain PEM files, install as crypto objects, update the SSL client profile within a transaction, and commit. If the transaction fails, F5 rolls back automatically and the connector cleans up uploaded crypto objects. Updating an SSL profile automatically takes effect on all bound virtual servers — no separate virtual server binding step is needed.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `host` | string | *(required)* | F5 BIG-IP management hostname or IP |
+| `port` | int | `443` | iControl REST API port |
+| `username` | string | *(required)* | Administrative username |
+| `password` | string | *(required)* | Administrative password |
+| `partition` | string | `Common` | F5 partition for crypto objects and profiles |
+| `ssl_profile` | string | *(required)* | SSL client profile name to update |
+| `insecure` | bool | `true` | Skip TLS verification for management interface (self-signed certs common) |
+| `timeout` | int | `30` | HTTP timeout in seconds |
+
+```json
+{
+  "host": "f5.internal.example.com",
+  "port": 443,
+  "username": "admin",
+  "password": "...",
+  "partition": "Common",
+  "ssl_profile": "clientssl_api",
+  "insecure": true,
+  "timeout": 30
+}
+```
+
+F5 credentials are stored on the proxy agent, not on the control plane server. This limits the credential blast radius to the proxy agent's network zone. Config fields are validated against regex patterns to prevent injection.
+
+Location: `internal/connector/target/f5/f5.go`
+
+### IIS (Implemented, Dual-Mode)
+
+The IIS target connector supports two deployment modes — agent-local (recommended) and proxy agent WinRM for agentless targets.
+
+**Agent-local (recommended):** A Windows agent runs directly on the IIS server and deploys certificates using PowerShell — `Import-PfxCertificate` to install into the certificate store and `Set-WebBinding` to bind to the IIS site. The agent handles PEM-to-PFX conversion via `go-pkcs12`, computes SHA-1 thumbprint from the certificate, and executes parameterized PowerShell scripts for injection-safe binding management. This is the preferred approach: no remote access needed, no credential management, same pull-based model as NGINX/Apache/HAProxy.
+
+**Proxy agent WinRM (for agentless targets):** For Windows servers where you don't want to install an agent, a Linux or Windows proxy agent in the same network zone connects via WinRM (Windows Remote Management) and executes PowerShell commands remotely. The PFX bundle is base64-encoded, transferred inline in the WinRM session, decoded to a temp file on the remote host, imported, and the temp file is cleaned up in a `try/finally` block. WinRM credentials are configured on the target, not on the control plane. Uses the `masterzen/winrm` Go library with support for Basic, NTLM, and Kerberos authentication.
+
+**Agent-local configuration:**
+```json
+{
+  "hostname": "iis-server.example.com",
+  "site_name": "Default Web Site",
+  "cert_store": "WebHosting",
+  "port": 443,
+  "sni": true,
+  "ip_address": "*",
+  "binding_info": "www.example.com"
+}
+```
+
+**WinRM proxy configuration:**
+```json
+{
+  "hostname": "iis-server.example.com",
+  "site_name": "Default Web Site",
+  "cert_store": "WebHosting",
+  "port": 443,
+  "sni": true,
+  "ip_address": "*",
+  "mode": "winrm",
+  "winrm": {
+    "winrm_host": "iis-server.example.com",
+    "winrm_port": 5985,
+    "winrm_username": "Administrator",
+    "winrm_password": "...",
+    "winrm_https": false,
+    "winrm_insecure": false,
+    "winrm_timeout": 60
+  }
+}
+```
+
+**Configuration Fields:**
+- `hostname` (string, required): IIS server hostname or FQDN
+- `site_name` (string, required): IIS website name (e.g., "Default Web Site")
+- `cert_store` (string, required): Certificate store for import (e.g., "WebHosting", "My")
+- `port` (number, default 443): HTTPS binding port
+- `sni` (boolean, default false): Enable Server Name Indication (SNI)
+- `ip_address` (string, default "*"): Specific IP to bind to, or "*" for all IPs
+- `binding_info` (string, optional): Host header for SNI bindings
+- `mode` (string, default "local"): Deployment mode — `local` (agent-local PowerShell) or `winrm` (remote via WinRM)
+- `exec_deadline` (duration, default `60s`): Per-PowerShell-subprocess cap that fires only when the caller's `ctx` has no deadline of its own. A caller-supplied deadline always wins; this is a safety net so a hung WinRM session or stuck `Cert:` provider call cannot block the deploy worker indefinitely. Operators on slow links (high-latency WinRM, slow Windows VMs) can extend with e.g. `"exec_deadline": "5m"`.
+
+**WinRM fields (required when `mode` is `winrm`):**
+- `winrm.winrm_host` (string, required): Remote Windows server hostname or IP
+- `winrm.winrm_port` (number, default 5985 HTTP / 5986 HTTPS): WinRM listener port
+- `winrm.winrm_username` (string, required): Windows account with admin privileges
+- `winrm.winrm_password` (string, required): Account password
+- `winrm.winrm_https` (boolean, default false): Use HTTPS transport
+- `winrm.winrm_insecure` (boolean, default false): Skip TLS certificate verification
+- `winrm.winrm_timeout` (number, default 60): Operation timeout in seconds
+
+**Security Model:**
+- PFX files are transient — generated with random passwords, deleted after import
+- In WinRM mode, PFX data is base64-encoded and transferred inline (no SMB/file share needed), with remote temp file cleanup in `try/finally`
+- PowerShell commands use parameterized values — IIS names and cert stores are regex-validated before script execution
+- Field names are validated against `^[a-zA-Z0-9 _\-\.]+$` to prevent PowerShell injection
+- Certificate thumbprints computed via SHA-1 for IIS binding lookups
+
+Location: `internal/connector/target/iis/iis.go`, `internal/connector/target/iis/winrm.go`
+
+### SSH (Agentless Deployment)
+
+The SSH target connector enables agentless certificate deployment to any Linux/Unix server via SSH/SFTP. Instead of installing the certctl agent binary on every target, a single "proxy agent" in the same network zone deploys certificates to remote servers over SSH. This is ideal for environments where installing agents on every server is impractical.
+
+**Key authentication (recommended):**
+```json
+{
+  "host": "web-server.internal",
+  "port": 22,
+  "user": "certctl",
+  "auth_method": "key",
+  "private_key_path": "/home/certctl/.ssh/id_ed25519",
+  "cert_path": "/etc/ssl/certs/cert.pem",
+  "key_path": "/etc/ssl/private/key.pem",
+  "chain_path": "/etc/ssl/certs/chain.pem",
+  "reload_command": "systemctl reload nginx",
+  "timeout": 30
+}
+```
+
+**Password authentication:**
+```json
+{
+  "host": "legacy-server.internal",
+  "user": "deploy",
+  "auth_method": "password",
+  "password": "s3cret",
+  "cert_path": "/etc/ssl/cert.pem",
+  "key_path": "/etc/ssl/key.pem",
+  "reload_command": "systemctl reload apache2"
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `host` | string | *(required)* | SSH hostname or IP address |
+| `port` | number | 22 | SSH port |
+| `user` | string | *(required)* | SSH username |
+| `auth_method` | string | `"key"` | `"key"` or `"password"` |
+| `private_key_path` | string | | Path to SSH private key file (key auth) |
+| `private_key` | string | | Inline SSH private key PEM (alternative to path) |
+| `password` | string | | SSH password (password auth) |
+| `passphrase` | string | | Passphrase for encrypted private keys |
+| `cert_path` | string | *(required)* | Remote path for certificate file |
+| `key_path` | string | *(required)* | Remote path for private key file |
+| `chain_path` | string | | Remote path for chain file (if empty, chain appended to cert) |
+| `cert_mode` | string | `"0644"` | File permissions for cert (octal) |
+| `key_mode` | string | `"0600"` | File permissions for private key (octal) |
+| `reload_command` | string | | Command to execute after deployment |
+| `timeout` | number | 30 | SSH connection timeout in seconds |
+
+**Security:**
+- Key-based authentication is recommended over password authentication
+- Reload commands are validated against shell injection (same validation as Postfix/Dovecot connectors)
+- Host field is regex-validated to prevent shell metacharacters
+- Private keys are written with 0600 permissions by default
+- Host key verification is intentionally skipped (same rationale as network scanner and F5 connector — deploying to known, operator-configured infrastructure)
+- Encrypted private keys supported via passphrase
+
+Location: `internal/connector/target/ssh/ssh.go`
+
+#### Operator playbook: SSH host-key verification
+
+certctl's SSH connector dials each target with `HostKeyCallback: ssh.InsecureIgnoreHostKey()`, meaning **the connector accepts any server host key without comparison against `known_hosts`**. This is a documented design choice (see `internal/connector/target/ssh/ssh.go` near `realSSHClient.Connect`) and not an oversight. The rationale + when it's safe + what to layer on top when it isn't:
+
+**Why the connector accepts any host key:**
+
+- certctl deploys to **operator-configured target infrastructure**. Each target is registered explicitly in the control plane with hostname + auth credentials + cert/key paths; the operator implicitly trusts the host they're deploying to (otherwise why give it a TLS cert).
+- Mirrors the same posture certctl applies to the network scanner (`InsecureSkipVerify` for cert-monitoring TLS handshakes) and the F5 connector (`Insecure` flag for self-signed BIG-IP management interfaces).
+- Avoids a heavyweight per-target `known_hosts` management layer that would shift complexity onto operators with no proportional security gain when the network model is "operator-configured infrastructure on operator-controlled network".
+
+**Threat model the design choice accepts:**
+
+- A **passive eavesdropper** on the agent-to-target link. SSH's transport encryption still applies — host-key acceptance affects MITM vulnerability, not on-the-wire confidentiality.
+- A **MITM attacker** on the agent-to-target link who can intercept the SSH TCP handshake AND has positioned themselves on a hostname the operator has registered as a deploy target. Layered authentication (per-target SSH keys with strong passphrases stored at the agent) limits the blast radius — the MITM gets one target's cert+key payload, not the agent's broader credentials.
+
+**Threat model the design choice does NOT accept:**
+
+- Deploying across the **public internet** to a host whose IP rotates (e.g. ephemeral cloud instances behind a load balancer that doesn't pin SSH host keys). In that scenario, `InsecureIgnoreHostKey` opens an MITM window during IP rotation — register a `known_hosts` file path or use SSH certificates (below) instead.
+- **Multi-tenant networks** where another tenant could plausibly impersonate the target host. certctl's design assumes operator-controlled network paths.
+
+**Mitigations operators can layer on:**
+
+- **`known_hosts` enforcement**: implement a custom `SSHClient` (the connector's `SSHClient` interface accepts injected clients via `NewWithClient`) whose `Connect` method builds an `ssh.ClientConfig` with `HostKeyCallback` set to `knownhosts.New("/path/to/known_hosts")` from `golang.org/x/crypto/ssh/knownhosts`. Configure the agent to use that client.
+- **SSH certificate authentication**: use OpenSSH 5.4+ host certificates signed by an organizational CA. Configure the agent's `known_hosts` CA pinning via `@cert-authority` lines so any host presenting a certificate signed by the CA is trusted, regardless of IP rotation.
+- **Network segmentation**: run the certctl agent on the same private network segment as its targets; require VPN tunnels for cross-network deploys; use bastion hosts with their own host-key validation.
+- **Per-target SSH keys**: rotate the agent's SSH credentials per target so a successful MITM compromise is bounded to that one target's cert+key, not the agent's broader credential set.
+
+**When you should NOT use the SSH connector:**
+
+- Deploying to **unknown / dynamic / multi-tenant** hosts where the IP-to-hostname binding isn't operator-controlled.
+- Environments with strict **regulatory MITM-resistance** requirements where the inline-comment "out of scope" framing doesn't satisfy reviewers who want documented host-key verification at the connector level.
+- For these cases, switch to a different connector (Kubernetes Secrets, WinCertStore, F5 with iControl REST under operator-managed cert pinning) **OR** layer a custom `SSHClient` with full `known_hosts` validation per the mitigations above.
+
+**V3-Pro forward path:**
+
+The operator-managed `known_hosts` integration (config field + `HostKeyCallback` plumbing + per-target root-of-trust enforcement) is documented as V3-Pro work. Tracking: `WORKSPACE-ROADMAP.md` (search for "SSH known_hosts").
+
+### Windows Certificate Store
+
+The Windows Certificate Store connector imports certificates into the Windows cert store via PowerShell, without managing IIS site bindings. Use this for non-IIS Windows services that read certificates from the cert store (Exchange, RDP, SQL Server, ADFS, etc.). Same injectable `PowerShellExecutor` pattern as the IIS connector, with optional WinRM proxy mode.
+
+```json
+{
+  "store_name": "My",
+  "store_location": "LocalMachine",
+  "friendly_name": "Production API Cert",
+  "remove_expired": true
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `store_name` | string | `"My"` | Windows cert store name (My, Root, WebHosting, etc.) |
+| `store_location` | string | `"LocalMachine"` | `"LocalMachine"` or `"CurrentUser"` |
+| `friendly_name` | string | | Optional friendly name for the imported certificate |
+| `remove_expired` | boolean | `false` | Remove expired certs with same CN after import |
+| `mode` | string | `"local"` | `"local"` (agent-local) or `"winrm"` (remote) |
+| `winrm_host` | string | | WinRM hostname (required for winrm mode) |
+| `winrm_port` | number | 5985 | WinRM port (5985 HTTP, 5986 HTTPS) |
+| `winrm_username` | string | | WinRM username (required for winrm mode) |
+| `winrm_password` | string | | WinRM password (required for winrm mode) |
+| `winrm_https` | boolean | `false` | Use HTTPS for WinRM |
+| `winrm_insecure` | boolean | `false` | Skip TLS verification for WinRM |
+| `exec_deadline` | duration | `60s` | Per-PowerShell-subprocess cap that fires only when the caller's `ctx` has no deadline of its own. A caller-supplied deadline always wins; this is a safety net so a hung WinRM session or stuck `Cert:` provider call cannot block the deploy worker indefinitely. Operators on slow links can extend with e.g. `"exec_deadline": "5m"`. |
+
+Location: `internal/connector/target/wincertstore/wincertstore.go`
+
+### Java Keystore (JKS / PKCS#12)
+
+The Java Keystore connector deploys certificates to JKS or PKCS#12 keystores via the `keytool` CLI. This enables TLS cert deployment for Tomcat, Jetty, Kafka, Elasticsearch, and any JVM-based service. Flow: PEM to temp PKCS#12, then `keytool -importkeystore` into the target keystore.
+
+```json
+{
+  "keystore_path": "/opt/tomcat/conf/keystore.p12",
+  "keystore_password": "changeit",
+  "keystore_type": "PKCS12",
+  "alias": "server",
+  "reload_command": "systemctl restart tomcat"
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `keystore_path` | string | *(required)* | Absolute path to the keystore file |
+| `keystore_password` | string | *(required)* | Keystore password |
+| `keystore_type` | string | `"PKCS12"` | `"PKCS12"` or `"JKS"` |
+| `alias` | string | `"server"` | Key entry alias in the keystore |
+| `reload_command` | string | | Optional command to run after keystore update |
+| `create_keystore` | boolean | `true` | Create keystore if it doesn't exist |
+| `keytool_path` | string | `"keytool"` | Override keytool binary path |
+| `backup_retention` | int | `3` | Number of `.certctl-bak.<unix-nanos>.p12` snapshot files to keep after a successful deploy. `0` means use the default of 3; `-1` opts out of pruning entirely. |
+| `backup_dir` | string | `dirname(keystore_path)` | Override directory where rollback snapshots are written and pruned from. Defaults to the keystore's own directory so snapshots land on the same filesystem. |
+
+**Security:**
+- Reload commands validated against shell injection via `validation.ValidateShellCommand()`
+- Alias validated against injection (alphanumeric, hyphens, underscores only)
+- Path traversal prevention on keystore path
+- Transient PKCS#12 temp file cleaned up after import (even on error)
+
+**Atomic rollback (Bundle 8 of the 2026-05-02 deployment-target audit):**
+
+The deploy flow is **snapshot → delete → import → reload**. Before the irreversible `keytool -delete` step (which removes the existing alias from the keystore), the connector runs `keytool -exportkeystore` to write a sibling `.certctl-bak.<unix-nanos>.p12` file containing the prior alias. If the subsequent `keytool -importkeystore` fails for any reason, the rollback path runs `keytool -delete` (best-effort cleanup of any partial alias the failed import created) followed by `keytool -importkeystore` from the snapshot PFX, restoring the keystore to its pre-deploy state. If both the import AND the rollback fail, the connector returns an operator-actionable wrapped error containing both error strings AND the snapshot path so the operator can manually `keytool -importkeystore` from the `.p12` file to recover.
+
+Successful deploys prune older `.certctl-bak.*.p12` files beyond the configured `backup_retention` count; pruning sorts by file ModTime and removes the oldest entries first. Operators that wire their own archival/rotation logic can opt out via `backup_retention: -1`.
+
+First-time deploys (no keystore file exists at the configured path) skip the snapshot phase entirely — there's nothing to roll back to. The same is true for "alias-not-present-in-existing-keystore" deploys: `keytool -exportkeystore` returns "alias does not exist" which the connector recognises as a normal first-time-on-existing-keystore signal, not an outage.
+
+### Operator playbook: keytool argv password exposure
+
+Java's `keytool` accepts the keystore password via the `-storepass` argv flag — there is no stdin or file-based password mode in OpenJDK keytool. While the keytool subprocess is running, the password is visible in `ps(1)` output to any user on the same host who can read `/proc/<pid>/cmdline`. This is a **standard keytool limitation, not a certctl-specific issue**, but operators in regulated environments should know about it before deploying certctl on shared hosts.
+
+**What this means in practice:**
+
+- The password is visible for the duration of each keytool invocation (typically <1s on modern hardware; the connector runs 2-4 keytool calls per deploy: snapshot, optional pre-import delete, import, optional rollback).
+- A local user with shell access on the agent host who polls `ps -ef` aggressively can capture the password.
+- The exposure is local to the agent host; remote attackers without shell access cannot see it.
+- The same applies to the snapshot's transient `-deststorepass` (which mirrors the operator's keystore password by design — see "Why the snapshot reuses the keystore password" below).
+
+**Mitigations** (layer one or more depending on threat model):
+
+- **Restrict shell access to the agent host.** Only the certctl agent's service account should have a login shell. Other admins SSH to a bastion that doesn't host the agent.
+- **Use Linux user namespaces or AppArmor** to deny `ps`-visibility into the keytool subprocess for non-root users. SystemD's `ProtectKernelTunables=yes` + `ProtectProc=invisible` (kernel 5.8+) hides `/proc/<pid>` from non-owner users.
+- **Run the certctl agent in a single-purpose container** so only the agent's processes are visible to anyone who execs into the container. The host's `ps` doesn't see container internals if proper PID-namespace isolation is configured.
+- **Rotate the keystore password post-deployment.** For high-security environments where the brief exposure is unacceptable, the rotation can itself be automated via a post-deploy hook running `keytool -storepasswd`. The certctl `reload_command` is the natural place for this; just be aware the new password must be propagated to whatever service reads the keystore (Tomcat's `server.xml`, Kafka's `kafka.properties`, etc.).
+- **For FIPS environments**, use the `BCFKS` (BouncyCastle FIPS) keystore type which supports stronger password-derivation. Same argv-exposure caveat applies; the keystore-format change doesn't affect how keytool receives the password.
+
+For a fundamentally different password-handling model, switch to a non-Java target (e.g. PEM-on-disk via the SSH connector + a JCA-shim like `tomcat-native` reading PEMs directly) or a PKCS#11 keystore (where the password is supplied to the cryptoki library, not via argv).
+
+**Why the snapshot reuses the keystore password.** The snapshot's `keytool -exportkeystore` writes a PKCS#12 file under a `-deststorepass`. The connector reuses the operator's `keystore_password` for this rather than generating a separate transient password. Two reasons: (a) the operator already trusts the connector with this secret, so the surface area doesn't grow; (b) the rollback's matching `keytool -importkeystore` needs to know the password too, and threading a second random password through the in-memory state machine adds complexity (and another argv-exposure window) for no security gain. If you rotate the keystore password between deploys, the rollback may fail to read the snapshot — keep stale `.certctl-bak.*.p12` files on disk until the rotation completes, and clean them up manually if rotation invalidates them.
+
+Location: `internal/connector/target/javakeystore/javakeystore.go`
+
+### Kubernetes Secrets
+
+The Kubernetes Secrets connector deploys certificates as `kubernetes.io/tls` Secrets, compatible with Ingress controllers (nginx-ingress, Traefik, HAProxy), service meshes (Istio, Linkerd), and any Kubernetes workload that reads TLS Secrets.
+
+```json
+{
+  "namespace": "production",
+  "secret_name": "api-tls",
+  "labels": {"app": "api-gateway"},
+  "kubeconfig_path": "/home/agent/.kube/config"
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `namespace` | string | *(required)* | Kubernetes namespace (DNS-1123, max 63 chars) |
+| `secret_name` | string | *(required)* | Secret name (DNS subdomain, max 253 chars) |
+| `labels` | object | | Additional labels to apply to the Secret |
+| `kubeconfig_path` | string | | Path to kubeconfig for out-of-cluster agents |
+
+**Deployment modes:**
+- **In-cluster (default):** Agent runs as a Pod with a ServiceAccount. Authentication via auto-mounted token. Requires RBAC (`secrets.get`, `secrets.create`, `secrets.update`, `secrets.list`) — see Helm chart.
+- **Out-of-cluster:** Agent runs outside the cluster with `kubeconfig_path` pointing to a kubeconfig file. Useful for proxy agent pattern.
+
+**Secret format:** Standard `kubernetes.io/tls` with `tls.crt` (cert + chain PEM) and `tls.key` (private key PEM). Managed labels (`app.kubernetes.io/managed-by: certctl`) and annotations (`certctl.io/deployed-at`, `certctl.io/certificate-id`) are applied automatically.
+
+**Validation:** After deployment, the connector reads the Secret back and compares the certificate serial number to verify successful deployment.
+
+Location: `internal/connector/target/k8ssecret/k8ssecret.go`
+
+### AWS Certificate Manager (ACM)
+
+The AWS ACM target connector deploys certificates into AWS Certificate Manager — the public AWS service that ALB / CloudFront / API Gateway / App Runner consume by ARN. Closes the "we terminate TLS at AWS, how do we get certctl-issued certs to ALB?" question for cloud-first deployments. Rank 5 of the 2026-05-03 Infisical deep-research deliverable.
+
+```json
+{
+  "region": "us-east-1",
+  "certificate_arn": "arn:aws:acm:us-east-1:123456789012:certificate/abcdef01-2345-6789-abcd-ef0123456789",
+  "tags": {"env": "production", "app": "api-gateway"}
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `region` | string | *(required)* | AWS region for the ACM endpoint (e.g., `us-east-1`). CloudFront-attached certs MUST live in `us-east-1`; ALB / API Gateway use the same region as the load balancer. |
+| `certificate_arn` | string | | ARN of an existing ACM certificate to rotate in place. Empty on first deploy — the adapter creates a new ACM cert via `ImportCertificate` and the deployment record's Metadata captures the resulting ARN. Operators can also pre-create the ARN out-of-band (Terraform, CloudFormation) and pin it here. |
+| `tags` | object | | Tags applied to the ACM cert at first import + re-applied via `AddTagsToCertificate` on every subsequent import (ACM strips tags on re-import). The reserved keys `certctl-managed-by` and `certctl-certificate-id` are set automatically and cannot be overridden. |
+
+**IAM policy (minimum permissions):**
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": [
+      "acm:ImportCertificate",
+      "acm:GetCertificate",
+      "acm:DescribeCertificate",
+      "acm:ListCertificates",
+      "acm:AddTagsToCertificate"
+    ],
+    "Resource": "arn:aws:acm:*:*:certificate/*"
+  }]
+}
+```
+
+**Auth recipes:**
+
+- **IRSA (IAM Roles for Service Accounts) — recommended for K8s deploys.** Annotate the agent's ServiceAccount with `eks.amazonaws.com/role-arn=arn:aws:iam::<account>:role/certctl-acm-deployer`. The role's trust policy allows the cluster's OIDC provider; permission policy is the JSON above. Short-lived STS credentials are auto-rotated by EKS — no long-lived access keys.
+- **EC2 instance profile — recommended for VM-based agents.** Attach an instance profile referencing the same role. SDK's `LoadDefaultConfig` picks credentials up via the IMDS metadata service.
+- **AWS SSO / `aws configure sso` — recommended for operator workstations.** SDK reads `~/.aws/config` for the SSO profile and refreshes tokens via the existing CLI session.
+- **Long-lived access keys are NOT supported in connector Config** — the credential chain is configured at the SDK level, not the connector level. This is a procurement-readability decision: a security reviewer reading the deployment_targets table should never find an access key.
+
+**Atomic-rollback contract:**
+
+Every `DeployCertificate` snapshots the existing cert via `DescribeCertificate` + `GetCertificate` BEFORE calling `ImportCertificate` with the new bytes. After import, the connector re-fetches the cert metadata and compares serial numbers. On serial-mismatch (post-verify failure), the connector calls `ImportCertificate` again with the snapshotted bytes to restore the previous cert. The rollback path emits a `WARN`-level slog entry; the rollback's own success or failure is exposed via `certctl_deploy_rollback_total{target_type="AWSACM",outcome="restored"|"also_failed"}` per the deploy-hardening I Phase 10 metric exposer. Mirrors the Bundle 5+ pre-deploy-snapshot pattern shipped for IIS / WinCertStore / JavaKeystore.
+
+**ALB attachment recipe:**
+
+certctl creates / rotates the ACM cert; the operator (or Terraform / CloudFormation) attaches it to the ALB listener separately. For Terraform-driven deployments, look up the ARN by tag:
+
+```hcl
+data "aws_acm_certificate" "certctl_managed" {
+  domain      = "api.example.com"
+  most_recent = true
+
+  # Filter by certctl provenance tags so an unrelated ACM cert with
+  # the same SAN doesn't get picked up.
+  tags = {
+    "certctl-managed-by"      = "certctl"
+    "certctl-certificate-id"  = "mc-api-prod"
+  }
+}
+
+resource "aws_lb_listener" "https" {
+  load_balancer_arn = aws_lb.api.arn
+  port              = 443
+  protocol          = "HTTPS"
+  certificate_arn   = data.aws_acm_certificate.certctl_managed.arn
+  # ...
+}
+```
+
+The ARN updates in place across renewals (ACM `ImportCertificate` is upsert-style when given an ARN), so the ALB listener's `certificate_arn` reference doesn't change. CloudFront / API Gateway distributions can reference the same ARN via their respective Terraform resources.
+
+**Threat model carve-outs:**
+
+- **Cert key bytes never written to disk on the agent.** `DeployCertificate` reads `request.KeyPEM` from memory and passes it to the SDK's `ImportCertificate` call. No temp file. No swap-out window.
+- **Provenance tags are mandatory.** The reserved `certctl-managed-by=certctl` + `certctl-certificate-id=<mc-id>` pair is set automatically on every import. Operators identifying a stray ACM cert in their account can match against `certctl-managed-by` to confirm it was certctl-issued (or NOT — the absence of the tag means a manual import).
+- **No long-lived AWS credentials in `Config`.** `Config` carries region + ARN + operator tags only. AWS auth is the SDK credential chain (IRSA / instance profile / SSO).
+- **`ListCertificates` IAM permission is required for the V2 ARN-discovery dance to work.** Operators who pin `Config.CertificateArn` after the first deploy can drop this permission; the V2 fallback emits a warning and reverts to "always create new ARN" if the operator forgets to update `certificate_arn` post-first-deploy.
+
+**Procurement checklist crib (paste into security review):**
+
+- certctl uses short-lived IAM-role credentials via IRSA / instance profile, not long-lived access keys.
+- The cert key is held only in agent memory during the import call; never written to disk.
+- Every imported ACM cert is tagged with `certctl-managed-by=certctl` + `certctl-certificate-id=<mc-id>` for forensic traceability.
+- Failed imports trigger automatic rollback to the snapshotted previous cert; both outcomes are surfaced via Prometheus.
+- The minimum IAM policy is 5 actions on `arn:aws:acm:*:*:certificate/*`; CloudTrail captures every API call for audit.
+
+**ValidateOnly contract.** ACM has no dry-run API for `ImportCertificate`; `ValidateOnly` returns `target.ErrValidateOnlyNotSupported` per the deploy-hardening I Phase 3 sentinel contract. Operators preview deploys via `ValidateConfig` + `aws acm describe-certificate --certificate-arn <arn>` against the current ARN.
+
+Location: `internal/connector/target/awsacm/awsacm.go` + `internal/connector/target/awsacm/awsacm_failure_test.go` (per-error-class contract tests for `AccessDeniedException` / `ResourceNotFoundException` / `ThrottlingException` / `InvalidArgsException` / `RequestInProgressException`).
+
+### Azure Key Vault
+
+The Azure Key Vault target connector deploys certificates into Azure Key Vault — the Azure-managed cert/secret store that Application Gateway / Front Door / App Service / Container Apps consume by KID URI. Rank 5 (Azure half) of the 2026-05-03 Infisical deep-research deliverable.
+
+```json
+{
+  "vault_url": "https://my-vault.vault.azure.net",
+  "certificate_name": "api-prod",
+  "tags": {"env": "production", "app": "api-gateway"},
+  "credential_mode": "managed_identity"
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `vault_url` | string | *(required)* | Key Vault DNS endpoint (`https://<vault-name>.vault.azure.net`). For US-Gov: `.vault.usgovcloudapi.net`; for China: `.vault.azure.cn`. |
+| `certificate_name` | string | *(required)* | Cert object name in the vault (1-127 chars, alphanumeric + hyphens). Versions are auto-generated per import. |
+| `tags` | object | | Tags applied at every import (Key Vault carries tags forward across versions, unlike ACM). Reserved keys `certctl-managed-by` + `certctl-certificate-id` are set automatically. |
+| `credential_mode` | string | `default` | One of `default` / `managed_identity` / `client_secret` / `workload_identity`. See "Auth recipes" below. |
+
+**RBAC role (minimum permissions):**
+
+The off-the-shelf builtin role **Key Vault Certificates Officer** covers everything. For minimum-permission deploys, use a custom role with these data-plane operations on the vault scope (`/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.KeyVault/vaults/<vault-name>`):
+
+```
+Microsoft.KeyVault/vaults/certificates/import/action
+Microsoft.KeyVault/vaults/certificates/read
+Microsoft.KeyVault/vaults/certificates/listversions/read
+```
+
+**Auth recipes:**
+
+- **AKS workload identity (`credential_mode: workload_identity`) — recommended for AKS deploys.** Annotate the agent's ServiceAccount with `azure.workload.identity/client-id=<app-id>`. The AKS cluster's OIDC issuer + the federated credential on the app registration handle token exchange; no long-lived secrets.
+- **Managed identity (`credential_mode: managed_identity`) — recommended for VM / App Service deploys.** Assign a system-assigned or user-assigned managed identity to the host; certctl-server / agent picks it up via IMDS. Pin `credential_mode` rather than letting `default` fall through to env vars (defends against accidental local-dev creds leaking into production).
+- **Service principal (`credential_mode: client_secret`).** Configure `AZURE_TENANT_ID` + `AZURE_CLIENT_ID` + `AZURE_CLIENT_SECRET` env vars on the agent. NOT recommended for production — long-lived client secret risk; rotate via Key Vault soft-delete recovery if leaked.
+- **Default (`credential_mode: default` or unset).** SDK's `DefaultAzureCredential` walks env vars → managed identity → Azure CLI fallback. Useful for local-dev where the operator already has `az login` active.
+- **Long-lived secrets in connector Config NOT supported** — same procurement-readability rule as AWS ACM.
+
+**Atomic-rollback contract + Azure-version semantics:**
+
+Every `DeployCertificate` snapshots the existing latest version via `GetCertificate(name, "" /* latest */)` BEFORE calling `ImportCertificate`. After import, the connector re-fetches the latest version and compares serial numbers. On serial-mismatch, the connector calls `ImportCertificate` again with the snapshotted CER bytes (re-PFX'd with the operator's key) — **as a NEW VERSION**. Key Vault doesn't support "version-restore" without soft-delete recovery (which we keep off the minimum-RBAC surface). The version history will show e.g. v1=initial, v2=failed-renewal, v3=rollback-of-v2; operators reading audit dashboards filter by tag.
+
+**Soft-delete caveat.** V2 doesn't manage Key Vault soft-delete recovery. If a previous version was soft-deleted out-of-band (e.g. operator ran `az keyvault certificate delete`), the rollback re-imports the snapshot bytes as a new version rather than restoring the soft-deleted version. Operators alerting on rollback frequency should also watch for soft-delete events.
+
+**App Gateway / Front Door attachment recipe:**
+
+```hcl
+data "azurerm_key_vault_certificate" "certctl_managed" {
+  name         = "api-prod"
+  key_vault_id = azurerm_key_vault.main.id
+}
+
+resource "azurerm_application_gateway" "main" {
+  # ...
+  ssl_certificate {
+    name                = "certctl-managed"
+    key_vault_secret_id = data.azurerm_key_vault_certificate.certctl_managed.secret_id
+  }
+}
+```
+
+Application Gateway / Front Door reference the cert by KID URI; certctl rotates the version under the same name, and the AGW / Front Door reference auto-resolves to the latest version (the SDK's behaviour when the KID points to `/certificates/<name>/<version>` vs `/certificates/<name>` differs — the latter auto-tracks "latest"; the former pins). Pin the version-less KID for auto-tracking renewals.
+
+**Threat model carve-outs:**
+
+- **Cert key bytes never written to disk on the agent.** PFX wrapping happens in memory (PKCS#12 via `software.sslmate.com/src/go-pkcs12`); the base64-encoded PFX is passed straight to the SDK's `ImportCertificate` call.
+- **Provenance tags are mandatory.** Same `certctl-managed-by=certctl` + `certctl-certificate-id=<mc-id>` shape as AWS ACM. Operators identifying a stray Key Vault cert match against `certctl-managed-by`.
+- **No long-lived Azure credentials in `Config`.** `Config` carries vault URL + cert name + operator tags + credential mode only. Auth is the Azure SDK credential chain.
+- **`credential_mode: managed_identity` is the recommended production posture.** Defends against accidental env-var creds leaking into deployments where the host already has a managed identity assigned.
+
+**Procurement checklist crib (paste into security review):**
+
+- certctl uses Azure managed identity (or workload identity for AKS), not long-lived service-principal secrets.
+- The cert key is held only in agent memory during the PFX wrap + import call; never written to disk.
+- Every imported Key Vault cert is tagged with `certctl-managed-by=certctl` + `certctl-certificate-id=<mc-id>` for forensic traceability.
+- Failed imports trigger automatic rollback by re-importing the snapshotted previous version's bytes; both outcomes are surfaced via Prometheus.
+- The minimum RBAC role is 3 data-plane actions; Activity Log captures every API call for audit.
+
+**ValidateOnly contract.** Key Vault has no dry-run API; `ValidateOnly` returns `target.ErrValidateOnlyNotSupported`. Operators preview deploys via `ValidateConfig` + `az keyvault certificate show --vault-name <name> --name <cert>`.
+
+Location: `internal/connector/target/azurekv/azurekv.go` + `internal/connector/target/azurekv/sdk_client.go` (azcertificates SDK wrapping) + `internal/connector/target/azurekv/azurekv_test.go` (happy-path + rollback + per-error contract tests).
+
+## Notifier Connector
+
+Notifier connectors send alerts about certificate lifecycle events (expiration warnings, renewal success/failure, deployment status, policy violations).
+
+### Interface
+
+The service layer defines a simple notifier interface:
+
+```go
+// internal/service/notification.go
+
+type Notifier interface {
+    Send(ctx context.Context, recipient string, subject string, body string) error
+    Channel() string
+}
+```
+
+The connector layer has a richer interface:
+
+```go
+// internal/connector/notifier/interface.go
+
+type Connector interface {
+    ValidateConfig(ctx context.Context, config json.RawMessage) error
+    SendAlert(ctx context.Context, alert Alert) error
+    SendEvent(ctx context.Context, event Event) error
+}
+```
+
+Built-in notifiers: **Email** (SMTP), **Webhook** (HTTP POST), **Slack** (incoming webhook), **Microsoft Teams** (MessageCard webhook), **PagerDuty** (Events API v2), and **OpsGenie** (Alert API v2).
+
+### Routing expiry alerts across channels
+
+certctl-server runs a daily renewal-check loop that scans for managed certificates approaching expiry. For each cert that has crossed a configured threshold (default `[30, 14, 7, 0]` days), an `ExpirationWarning` notification is dispatched. **Pre-2026-05-03**, dispatch went exclusively via the `Email` channel — operators with PagerDuty / Slack / Teams / OpsGenie wired up received nothing at any threshold unless SMTP was also configured. Rank 4 of the 2026-05-03 Infisical deep-research deliverable closed that gap with a per-policy channel-matrix.
+
+**The matrix lives on `RenewalPolicy`:**
+
+```json
+{
+  "id": "rp-production",
+  "name": "Production CDN renewal policy",
+  "renewal_window_days": 30,
+  "alert_thresholds_days": [30, 14, 7, 0],
+  "alert_channels": {
+    "informational": ["Slack"],
+    "warning":       ["Slack", "Email"],
+    "critical":      ["PagerDuty", "OpsGenie", "Email"]
+  },
+  "alert_severity_map": {
+    "30": "informational",
+    "14": "warning",
+    "7":  "warning",
+    "0":  "critical"
+  }
+}
+```
+
+The runtime resolves the threshold's severity tier (via `alert_severity_map`, falling back to the default `30→informational, 14→warning, 7→warning, 0→critical` when unset), then dispatches one notification per channel listed under that tier in `alert_channels`. Each (cert, threshold, channel) triple is independently deduplicated via the `notification_events` table — a transient PagerDuty 5xx today does NOT suppress today's Slack alert, and tomorrow's renewal-loop tick will re-attempt the failed PagerDuty page.
+
+**Backwards compatibility.** A policy with `alert_channels` unset (or empty) falls through to `DefaultAlertChannels` which routes every tier to `["Email"]`. Operators who haven't touched their renewal-policy configs see exactly the pre-2026-05-03 behaviour, and SMTP-only deployments keep working as before.
+
+**Validation.** Off-enum severity tiers (anything other than `informational` / `warning` / `critical`) and off-enum channels (anything other than `Email` / `Webhook` / `Slack` / `Teams` / `PagerDuty` / `OpsGenie`) are silently dropped at the dispatch site — but the drop is recorded in the audit log as `expiration_alert_skipped_invalid_channel` so an operator can grep for typos. The `RenewalPolicyService.Create`/`Update` paths reject these at write time as well, so a fresh policy with bad values never persists.
+
+**Procurement playbook: "I want PagerDuty when a cert is 24h from expiry."** Configure your renewal policy with `alert_severity_map.0 = "critical"` (already the default) and `alert_channels.critical = ["PagerDuty", "Email"]`. Set the `CERTCTL_PAGERDUTY_ROUTING_KEY` env var on the server. Restart. The next renewal-loop tick that finds a cert at ≤0 days will create a PagerDuty incident via the Events API v2 AND email the cert owner. Confirm with `curl /api/v1/metrics/prometheus | grep certctl_expiry_alerts_total` — you'll see one `{channel="PagerDuty",threshold="0",result="success"}` series increment per critical-tier dispatch.
+
+**Operator runbook for "did the on-call team get paged?"** Run:
+
+```sql
+SELECT created_at, metadata->>'channel' AS channel, metadata->>'threshold_days' AS threshold
+FROM audit_events
+WHERE event_type = 'expiration_alert_sent'
+  AND resource_id = '<cert-id>'
+ORDER BY created_at DESC;
+```
+
+Each row corresponds to one fired alert. The `channel` metadata field tells you which notifier ran. Combined with the Prometheus `certctl_expiry_alerts_total{result="failure"}` counter, you have full forensic visibility on every dispatch attempt.
+
+**V3-Pro forward path.** Per-owner / per-team channel routing (route the Production-CDN cert's alerts to its dedicated owner's PagerDuty service, the Internal-API cert's alerts to a different one), calendar-aware suppression (no T-30 informational alerts on weekends for non-on-call teams), and escalation chains (T-1 unanswered for 30m → escalate to manager) are tracked on the project roadmap under "Adapter hardening" → "Multi-channel expiry alerts: per-owner routing".
+
+### Email (SMTP) Notifier
+
+The Email notifier sends transactional alerts and scheduled digests via SMTP. It bridges the connector-layer SMTP connector to the service-layer `Notifier` interface via the `NotifierAdapter`. Supports both plain text and HTML emails.
+
+Configuration:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CERTCTL_SMTP_HOST` | — | SMTP server hostname (required to enable) |
+| `CERTCTL_SMTP_PORT` | 587 | SMTP port (TLS) |
+| `CERTCTL_SMTP_USERNAME` | — | SMTP authentication username (optional) |
+| `CERTCTL_SMTP_PASSWORD` | — | SMTP authentication password (optional) |
+| `CERTCTL_SMTP_FROM_ADDRESS` | — | Email from address (required) |
+| `CERTCTL_SMTP_USE_TLS` | true | Enable TLS encryption |
+
+Example:
+```bash
+export CERTCTL_SMTP_HOST=smtp.gmail.com
+export CERTCTL_SMTP_PORT=587
+export CERTCTL_SMTP_USERNAME=admin@example.com
+export CERTCTL_SMTP_PASSWORD=app-password-123
+export CERTCTL_SMTP_FROM_ADDRESS=certctl@example.com
+```
+
+### Scheduled Certificate Digest
+
+The `DigestService` generates aggregated certificate digest emails and sends them on a configurable schedule. This is useful for periodic briefings on certificate inventory health — expiring certs, status summary, active agents, job trends.
+
+The digest HTML template includes:
+- Total certificates, expiring soon, expired, active agents (stats grid)
+- Jobs completed/failed summary (30 days)
+- Expiring certificates table (color-coded by urgency: 7d, 14d, 30d)
+- Auto-refresh and responsive email layout
+
+**Scheduler Integration:** The opt-in digest scheduler loop runs on configurable interval (default 24 hours). It does NOT run on startup — waits for first scheduled tick. Operation timeout is 5 minutes. Each loop execution is guarded by `sync/atomic.Bool` idempotency. See `docs/reference/architecture.md` for the full scheduler topology (12 loops, 8 always-on + 4 opt-in).
+
+Configuration:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CERTCTL_DIGEST_ENABLED` | false | Enable scheduled digest emails |
+| `CERTCTL_DIGEST_INTERVAL` | 24h | How often to send digest (any duration, e.g. 12h, 7d) |
+| `CERTCTL_DIGEST_RECIPIENTS` | — | Comma-separated email addresses. Falls back to certificate owner emails if empty |
+
+API Endpoints:
+
+- **`GET /api/v1/digest/preview`** — Render digest HTML for preview (no email sent)
+- **`POST /api/v1/digest/send`** — Trigger digest send immediately (outside of schedule)
+
+> **Note (HTTPS-only as of v2.2):** The `curl` examples in this section
+> and below all target the HTTPS-only control plane. Extract the
+> docker-compose self-signed bootstrap CA bundle once and reuse it on
+> every call:
+>
+> ```bash
+> export CA=/tmp/certctl-ca.crt
+> docker compose -f deploy/docker-compose.yml exec -T certctl-server \
+>   cat /etc/certctl/tls/ca.crt > "$CA"
+> ```
+>
+> Then pass `--cacert "$CA"` (or `-k` for one-off smoke tests, never in
+> production). The same pattern is documented in
+> [`quickstart.md`](../../getting-started/quickstart.md). Pre-U-2 these examples used `http://`
+> and silently failed against the HTTPS listener; post-U-2 they speak
+> HTTPS with the operator-managed CA bundle.
+
+Example:
+```bash
+# Preview digest
+curl --cacert "$CA" https://localhost:8443/api/v1/digest/preview | jq '.html'
+
+# Send digest immediately
+curl --cacert "$CA" -X POST https://localhost:8443/api/v1/digest/send
+```
+
+Each notifier is enabled by its configuration env var:
+
+| Notifier | Env Var | Description |
+|----------|---------|-------------|
+| Email | `CERTCTL_SMTP_HOST` | SMTP email delivery. See Email Notifier section above |
+| Webhook | `CERTCTL_WEBHOOK_URL` | HTTP POST to any endpoint. Optional: `CERTCTL_WEBHOOK_SECRET` for HMAC signing |
+| Slack | `CERTCTL_SLACK_WEBHOOK_URL` | Incoming webhook URL. Optional: `CERTCTL_SLACK_CHANNEL`, `CERTCTL_SLACK_USERNAME` |
+| Teams | `CERTCTL_TEAMS_WEBHOOK_URL` | Incoming webhook URL (MessageCard format) |
+| PagerDuty | `CERTCTL_PAGERDUTY_ROUTING_KEY` | Events API v2 routing key. Optional: `CERTCTL_PAGERDUTY_SEVERITY` (default: "warning") |
+| OpsGenie | `CERTCTL_OPSGENIE_API_KEY` | Alert API GenieKey. Optional: `CERTCTL_OPSGENIE_PRIORITY` (default: "P3") |
+
+In demo mode, notifications are marked as "sent" even without a configured notifier — this prevents error spam in the logs while still generating notification records for the dashboard to display.
+
+## Registering a Connector
+
+To add a new connector:
+
+1. Create a package under the appropriate directory:
+   - `internal/connector/issuer/myissuer/`
+   - `internal/connector/target/mytarget/`
+   - `internal/connector/notifier/mynotifier/`
+
+2. Implement the interface (all methods required)
+
+3. Register it in the service layer during server initialization in `cmd/server/main.go`.
+
+### IssuerConnectorAdapter
+
+Issuer connectors use an adapter pattern to bridge the connector-layer `issuer.Connector` interface with the service-layer `service.IssuerConnector` interface. This maintains dependency inversion — the service package never imports the connector package directly.
+
+The adapter (`internal/service/issuer_adapter.go`) translates between the two interface types:
+
+```go
+// Wrap your connector implementation with the adapter
+import "github.com/zulufun/certctl-localhost/internal/service"
+
+myIssuer := myissuer.New(config)
+adapted := service.NewIssuerConnectorAdapter(myIssuer)
+```
+
+Register adapted connectors keyed by the issuer ID from the database:
+
+```go
+// In cmd/server/main.go
+localCA := local.New(nil, logger)
+issuerRegistry := map[string]service.IssuerConnector{
+    "iss-local": service.NewIssuerConnectorAdapter(localCA),
+    "iss-vault": service.NewIssuerConnectorAdapter(vaultIssuer),  // your new issuer
+}
+```
+
+### Notifier Registration
+
+```go
+// For notifiers
+notifierRegistry := map[string]service.Notifier{
+    "Email":   emailNotifier,
+    "Webhook": webhookNotifier,
+    "Slack":   slackNotifier,  // your new notifier
+}
+```
+
+## Testing Connectors
+
+### Unit Tests
+
+```go
+func TestNginxDeploy(t *testing.T) {
+    cfg := &nginx.Config{
+        CertPath:        "/tmp/test-cert.pem",
+        ChainPath:       "/tmp/test-chain.pem",
+        ReloadCommand:   "echo reloaded",
+        ValidateCommand: "echo valid",
+    }
+    connector := nginx.New(cfg, slog.Default())
+
+    result, err := connector.DeployCertificate(ctx, target.DeploymentRequest{
+        CertPEM:  testCertPEM,
+        ChainPEM: testChainPEM,
+        KeyPEM:   testKeyPEM,
+    })
+    if err != nil {
+        t.Fatalf("deploy failed: %v", err)
+    }
+    if !result.Success {
+        t.Fatal("expected success")
+    }
+}
+```
+
+### Integration Tests
+
+```bash
+# Start dependent service
+docker run -d --name nginx -p 8080:80 nginx:latest
+
+# Run tests
+go test -tags=integration ./internal/connector/target/nginx/
+
+# Cleanup
+docker rm -f nginx
+```
+
+## Best Practices
+
+1. **Always validate config** — Check all required fields in `ValidateConfig` before any operation
+2. **Use context for timeouts** — All connector methods accept `context.Context`; honor cancellation and deadlines
+3. **Return descriptive errors** — Wrap errors with context so failures are diagnosable from logs
+4. **Never log secrets** — Don't log API tokens, passwords, or private key material
+5. **Support dry-run** — Where possible, support a validation/dry-run mode for deployment testing
+6. **Idempotent operations** — Deploying the same certificate twice should succeed, not fail
+7. **Report metadata** — Return deployment duration, target address, and other useful data in results
+
+## Agent Discovery Scanner
+
+Agents include a built-in certificate discovery scanner that walks configured directories and reports unmanaged certificates to the control plane. This is useful for discovering existing certificates already deployed in your infrastructure, so you can bring them under certctl's management.
+
+### Configuration
+
+Enable discovery on an agent by setting `CERTCTL_DISCOVERY_DIRS` to a comma-separated list of directories:
+
+```bash
+export CERTCTL_DISCOVERY_DIRS="/etc/nginx/certs,/etc/ssl/certs,/etc/apache2/ssl"
+```
+
+Or via command-line flag:
+
+```bash
+./agent --agent-id agent-nginx-01 --discovery-dirs "/etc/nginx/certs,/etc/ssl/certs"
+```
+
+The agent scans these directories on startup and every 6 hours, looking for certificate files in PEM or DER format (extensions: `.pem`, `.crt`, `.cer`, `.cert`, `.der`).
+
+### How It Works
+
+1. **Scan**: Agent recursively walks directories, extracts certificates
+2. **Deduplicate**: Control plane deduplicates by SHA-256 fingerprint (same cert in multiple locations is one discovery)
+3. **Store**: Discovered certificates stored with metadata (agent ID, file path, found date, fingerprint)
+4. **Triage**: Operators review discovered certs in the **Discovery** dashboard page (or via API) — claim to link to managed certificates, or dismiss false positives. The dashboard shows summary stats, filters by status and agent, and provides one-click claim/dismiss actions.
+
+### API Endpoints
+
+```bash
+# List discovered certificates (filter by agent, status)
+curl --cacert "$CA" -s "https://localhost:8443/api/v1/discovered-certificates?agent_id=agent-nginx-01&status=new" | jq .
+
+# Get discovery detail
+curl --cacert "$CA" -s https://localhost:8443/api/v1/discovered-certificates/DISCOVERY_ID | jq .
+
+# Claim a discovered cert (link to managed certificate)
+curl --cacert "$CA" -s -X POST https://localhost:8443/api/v1/discovered-certificates/DISCOVERY_ID/claim \
+  -H "Content-Type: application/json" \
+  -d '{"managed_certificate_id": "mc-api-prod"}' | jq .
+
+# Dismiss a discovery
+curl --cacert "$CA" -s -X POST https://localhost:8443/api/v1/discovered-certificates/DISCOVERY_ID/dismiss | jq .
+
+# View discovery scan history
+curl --cacert "$CA" -s https://localhost:8443/api/v1/discovery-scans | jq .
+
+# Summary counts (new, claimed, dismissed)
+curl --cacert "$CA" -s https://localhost:8443/api/v1/discovery-summary | jq .
+```
+
+### Use Cases
+
+- **Inventory audit** — Find all TLS certificates running in your infrastructure
+- **Migration** — Onboard existing certificates that were issued outside certctl
+- **Compliance** — Detect rogue/unauthorized certificates in monitored directories
+- **Integration** — Pull certificate data from systems that pre-generate certs (e.g., Kubernetes CertManager)
+
+## Network Certificate Scanner (M21)
+
+The control plane includes a built-in active TLS scanner that probes network endpoints and discovers certificates without requiring agent deployment. This complements the agent-based filesystem discovery with network-level visibility.
+
+### Configuration
+
+Enable network scanning on the server:
+
+```bash
+export CERTCTL_NETWORK_SCAN_ENABLED=true
+export CERTCTL_NETWORK_SCAN_INTERVAL=6h  # default
+```
+
+### Creating Scan Targets
+
+Network scan targets can be managed from the **Network Scans** dashboard page (create, edit, enable/disable, trigger on-demand scans) or via the API. Targets define which CIDR ranges and ports to probe:
+
+```bash
+# Create a scan target for your internal network (or use the dashboard's "+ New Target" button)
+curl --cacert "$CA" -s -X POST https://localhost:8443/api/v1/network-scan-targets \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Production Web Servers",
+    "cidrs": ["10.0.1.0/24", "10.0.2.0/24"],
+    "ports": [443, 8443, 6443],
+    "enabled": true,
+    "scan_interval_hours": 6,
+    "timeout_ms": 5000
+  }' | jq .
+```
+
+### How It Works
+
+1. **Expand**: CIDR ranges are expanded to individual IPs (safety cap at /20 = 4096 IPs)
+2. **Probe**: Concurrent TLS connections (50 goroutines) with configurable timeout per endpoint
+3. **Extract**: Certificate metadata extracted from TLS handshake (CN, SANs, serial, issuer, key info, fingerprint)
+4. **Pipeline**: Results fed into the same `DiscoveryService.ProcessDiscoveryReport()` as filesystem discovery
+5. **Deduplicate**: Sentinel agent ID (`server-scanner`) with source_path as `ip:port` ensures proper dedup
+6. **Triage**: Discovered certs appear in the **Discovery** dashboard page (and via `GET /api/v1/discovered-certificates`) with `agent_id=server-scanner`
+
+### API Endpoints
+
+```bash
+# List all scan targets
+curl --cacert "$CA" -s https://localhost:8443/api/v1/network-scan-targets | jq .
+
+# Create a scan target
+curl --cacert "$CA" -s -X POST https://localhost:8443/api/v1/network-scan-targets \
+  -H "Content-Type: application/json" \
+  -d '{"name": "DMZ", "cidrs": ["172.16.0.0/24"], "ports": [443]}' | jq .
+
+# Get a specific target (includes last_scan_at, last_scan_certs_found)
+curl --cacert "$CA" -s https://localhost:8443/api/v1/network-scan-targets/nst-dmz | jq .
+
+# Trigger an immediate scan (doesn't wait for scheduler)
+curl --cacert "$CA" -s -X POST https://localhost:8443/api/v1/network-scan-targets/nst-dmz/scan | jq .
+
+# Update scan configuration
+curl --cacert "$CA" -s -X PUT https://localhost:8443/api/v1/network-scan-targets/nst-dmz \
+  -H "Content-Type: application/json" \
+  -d '{"ports": [443, 8443, 9443], "timeout_ms": 3000}' | jq .
+
+# Delete a scan target
+curl --cacert "$CA" -s -X DELETE https://localhost:8443/api/v1/network-scan-targets/nst-dmz
+```
+
+### Scheduler Integration
+
+When `CERTCTL_NETWORK_SCAN_ENABLED=true`, the server runs the opt-in network scanner scheduler loop alongside the always-on loops (renewal, jobs, job retry, job timeout, agent health, notifications, notification retry, short-lived expiry). It scans all enabled targets at the configured interval (default 6h). Each target tracks `last_scan_at`, `last_scan_duration_ms`, and `last_scan_certs_found` for monitoring scan health. See `docs/reference/architecture.md` for the full 12-loop scheduler topology.
+
+### Use Cases
+
+- **Network inventory** — "What TLS certs are deployed across my network?" without deploying agents
+- **Shadow certificate detection** — Find certificates on services you didn't know were running TLS
+- **Compliance scanning** — Prove to auditors that all TLS endpoints are inventoried
+- **Migration assessment** — Scan a network range before onboarding to certctl management
+- **Expiration monitoring** — Discover soon-to-expire certs on network endpoints before they cause outages
+
+## Cloud Secret Manager Discovery
+
+certctl extends the existing filesystem and network discovery pipeline to cloud secret managers. Certificates stored in cloud vaults are automatically discovered, inventoried, and available for triage in the Discovery page.
+
+Each cloud source runs as a pluggable `DiscoverySource` with its own sentinel agent ID. Discovered certificates flow through the same `ProcessDiscoveryReport` pipeline used by filesystem and network discovery — dedup by fingerprint, audit trail, status tracking.
+
+### AWS Secrets Manager
+
+Discovers certificates stored as secrets in AWS Secrets Manager. Filters by tag (`type=certificate` by default) and optional name prefix.
+
+| Variable | Description | Default |
+|---|---|---|
+| `CERTCTL_CLOUD_DISCOVERY_ENABLED` | Enable cloud discovery scheduler | `false` |
+| `CERTCTL_AWS_SM_DISCOVERY_ENABLED` | Enable AWS SM source | `false` |
+| `CERTCTL_AWS_SM_REGION` | AWS region (e.g., `us-east-1`) | — |
+| `CERTCTL_AWS_SM_TAG_FILTER` | Tag key=value filter | `type=certificate` |
+| `CERTCTL_AWS_SM_NAME_PREFIX` | Secret name prefix filter | — |
+
+Source path format: `aws-sm://{region}/{secret-name}`. Sentinel agent: `cloud-aws-sm`.
+
+### Azure Key Vault
+
+Discovers certificates from Azure Key Vault using OAuth2 client credentials authentication. No Azure SDK dependency — uses stdlib HTTP with Azure AD token exchange.
+
+| Variable | Description | Default |
+|---|---|---|
+| `CERTCTL_AZURE_KV_DISCOVERY_ENABLED` | Enable Azure KV source | `false` |
+| `CERTCTL_AZURE_KV_VAULT_URL` | Vault URL (e.g., `https://myvault.vault.azure.net`) | — |
+| `CERTCTL_AZURE_KV_TENANT_ID` | Azure AD tenant ID | — |
+| `CERTCTL_AZURE_KV_CLIENT_ID` | Azure AD application (client) ID | — |
+| `CERTCTL_AZURE_KV_CLIENT_SECRET` | Azure AD application secret | — |
+
+Source path format: `azure-kv://{cert-name}/{version}`. Sentinel agent: `cloud-azure-kv`.
+
+### GCP Secret Manager
+
+Discovers certificates stored in GCP Secret Manager. Filters by label (`type=certificate`). Uses JWT-based OAuth2 service account auth — no Google SDK dependency.
+
+| Variable | Description | Default |
+|---|---|---|
+| `CERTCTL_GCP_SM_DISCOVERY_ENABLED` | Enable GCP SM source | `false` |
+| `CERTCTL_GCP_SM_PROJECT` | GCP project ID | — |
+| `CERTCTL_GCP_SM_CREDENTIALS` | Path to service account JSON file | — |
+
+Source path format: `gcp-sm://{project}/{secret-name}`. Sentinel agent: `cloud-gcp-sm`.
+
+### Cloud Discovery Scheduler
+
+All enabled cloud sources run on a shared opt-in cloud discovery scheduler loop (see `docs/reference/architecture.md` for the full 12-loop scheduler topology). The interval is configurable:
+
+| Variable | Description | Default |
+|---|---|---|
+| `CERTCTL_CLOUD_DISCOVERY_ENABLED` | Master switch | `false` |
+| `CERTCTL_CLOUD_DISCOVERY_INTERVAL` | Scan interval | `6h` |
+
+The loop runs immediately on startup and then on each tick. Each source runs sequentially within the loop. Errors from one source do not prevent other sources from running.
+
+## What's Next
+
+- [Architecture Guide](../architecture.md) — Understanding the full system design
+- [Quick Start](../../getting-started/quickstart.md) — Get certctl running locally
+- [Advanced Demo](../../getting-started/advanced-demo.md) — See the full certificate lifecycle in action

@@ -1,0 +1,408 @@
+// Copyright 2026 certctl LLC. All rights reserved.
+// SPDX-License-Identifier: BUSL-1.1
+
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"sync"
+	"time"
+
+	"github.com/zulufun/certctl-localhost/internal/connector/issuer"
+	"github.com/zulufun/certctl-localhost/internal/connector/issuer/acme"
+	"github.com/zulufun/certctl-localhost/internal/connector/issuer/local"
+	"github.com/zulufun/certctl-localhost/internal/connector/issuer/vault"
+	"github.com/zulufun/certctl-localhost/internal/connector/issuerfactory"
+	"github.com/zulufun/certctl-localhost/internal/crypto"
+	"github.com/zulufun/certctl-localhost/internal/crypto/signer"
+	"github.com/zulufun/certctl-localhost/internal/domain"
+	"github.com/zulufun/certctl-localhost/internal/repository"
+)
+
+// IssuerRegistry is a thread-safe registry of issuer connectors.
+// It replaces the static map[string]IssuerConnector that was built at startup.
+// Consumers call Get() to look up a connector by issuer ID.
+type IssuerRegistry struct {
+	mu      sync.RWMutex
+	issuers map[string]IssuerConnector
+	logger  *slog.Logger
+
+	// localDeps, when set, is injected into every *local.Connector
+	// constructed by Rebuild via SetOCSPResponderRepo + SetSignerDriver
+	// + SetIssuerID + SetOCSPResponderKeyDir. Wires the dedicated OCSP
+	// responder cert flow (RFC 6960 §2.6); see Bundle CRL/OCSP-Responder
+	// Phase 2. When unset, local connectors fall back to signing OCSP
+	// with the CA key directly (the historical behaviour, preserved for
+	// callers that don't supply these deps).
+	localDeps *LocalIssuerDeps
+
+	// metrics — when set, every adapter constructed by Rebuild is
+	// wired with SetMetrics so issuance / renewal calls flow through
+	// the per-issuer-type counter + histogram + failure tables.
+	// Closes the #4 audit-readiness blocker (per-issuer-type metrics).
+	metrics *IssuanceMetrics
+
+	// acmeCertLookup — when set, every freshly-constructed
+	// *acme.Connector is wired with SetCertificateLookup + SetIssuerID
+	// so its serial-only revoke path can recover the leaf-cert DER
+	// from the local cert store. Closes the #7 audit-readiness blocker.
+	// Nil leaves the legacy "ACME revocation by serial requires
+	// CertificateLookup wiring" error in place for old wiring paths.
+	acmeCertLookup acme.CertificateLookupRepo
+
+	// vaultRenewalMetrics — when set, every freshly-constructed
+	// *vault.Connector is wired with SetRenewalRecorder so the
+	// renew-self loop bumps the certctl_vault_token_renewals_total
+	// counter. Closes Top-10 fix #5 of the 2026-05-03 audit. Nil
+	// leaves the no-op recorder in place (no metric emission, but
+	// the loop still runs).
+	vaultRenewalMetrics *VaultRenewalMetrics
+}
+
+// LocalIssuerDeps groups the optional dependencies that the local
+// issuer needs for the dedicated OCSP responder cert flow. All fields
+// are required when localDeps is set on the registry; nil-checking
+// individual fields would partially-initialize the responder path
+// which is worse than the all-or-nothing fallback to direct CA-key
+// signing.
+type LocalIssuerDeps struct {
+	OCSPResponderRepo repository.OCSPResponderRepository
+	SignerDriver      signer.Driver
+	KeyDir            string        // where FileDriver-backed responder keys land
+	RotationGrace     time.Duration // optional override; default 7d if zero
+	Validity          time.Duration // optional override; default 30d if zero
+}
+
+// NewIssuerRegistry creates a new empty issuer registry.
+func NewIssuerRegistry(logger *slog.Logger) *IssuerRegistry {
+	return &IssuerRegistry{
+		issuers: make(map[string]IssuerConnector),
+		logger:  logger,
+	}
+}
+
+// SetLocalIssuerDeps configures the per-local-connector dependencies
+// applied by Rebuild. Must be called before BuildRegistry / Rebuild
+// so the deps are in place when local connectors are constructed.
+//
+// Bundle CRL/OCSP-Responder Phase 2.
+func (r *IssuerRegistry) SetLocalIssuerDeps(deps *LocalIssuerDeps) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.localDeps = deps
+}
+
+// SetIssuanceMetrics wires per-issuer-type issuance metrics. Every
+// adapter constructed by Rebuild after this call records issuance /
+// renewal calls into the supplied metrics tables. Closes the #4
+// audit-readiness blocker (per-issuer-type metrics).
+func (r *IssuerRegistry) SetIssuanceMetrics(m *IssuanceMetrics) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.metrics = m
+}
+
+// SetVaultRenewalMetrics wires the per-(result) counter table for
+// the Vault PKI renew-self loop. Every *vault.Connector constructed
+// by Rebuild after this call records its renewal results into the
+// supplied metrics. Closes Top-10 fix #5 of the 2026-05-03
+// issuer-coverage audit.
+//
+// The same instance must also be registered with the metrics
+// handler via MetricsHandler.SetVaultRenewals so the Prometheus
+// exposer emits certctl_vault_token_renewals_total{result=...}.
+// cmd/server/main.go owns both wiring sides; tests usually skip
+// the Prometheus side and just assert against the snapshot.
+func (r *IssuerRegistry) SetVaultRenewalMetrics(m *VaultRenewalMetrics) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.vaultRenewalMetrics = m
+}
+
+// SetACMECertLookup wires the cert-version lookup repo for every
+// *acme.Connector constructed by Rebuild. The lookup is used by the
+// serial-only revoke path (RevokeCertificate) to recover the leaf-
+// cert DER bytes from the local cert store; without it, ACME
+// RevokeCertificate falls back to the legacy V1 "not supported"
+// error. Closes the #7 audit-readiness blocker.
+//
+// Wire on the registry, not per-call: the registry already owns the
+// post-factory wiring step (mirrors SetLocalIssuerDeps), and the same
+// repo serves every ACME connector regardless of issuer ID — the
+// connector scopes its own lookups via the issuer ID injected by
+// SetIssuerID inside Rebuild.
+func (r *IssuerRegistry) SetACMECertLookup(repo acme.CertificateLookupRepo) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.acmeCertLookup = repo
+}
+
+// Get returns the issuer connector for the given ID and whether it exists.
+func (r *IssuerRegistry) Get(id string) (IssuerConnector, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	conn, ok := r.issuers[id]
+	return conn, ok
+}
+
+// Set adds or replaces an issuer connector in the registry.
+func (r *IssuerRegistry) Set(id string, conn IssuerConnector) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.issuers[id] = conn
+}
+
+// Remove removes an issuer connector from the registry.
+func (r *IssuerRegistry) Remove(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.issuers, id)
+}
+
+// List returns a copy of all registered issuers.
+func (r *IssuerRegistry) List() map[string]IssuerConnector {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := make(map[string]IssuerConnector, len(r.issuers))
+	for k, v := range r.issuers {
+		result[k] = v
+	}
+	return result
+}
+
+// Len returns the number of registered issuers.
+func (r *IssuerRegistry) Len() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.issuers)
+}
+
+// Rebuild reconstructs the registry from a list of issuer configs.
+// For each enabled issuer, it decrypts the config (if encryption key is set),
+// instantiates a connector via the factory, wraps it in an adapter, and
+// atomically swaps the entire map.
+//
+// The encryption passphrase is passed as a string; per-ciphertext salt derivation
+// for v2 blobs is performed inside [crypto.DecryptIfKeySet]. Empty passphrase
+// fails closed via [crypto.ErrEncryptionKeyRequired] when encrypted configs
+// are encountered. See M-8 in certctl-audit-report.md.
+func (r *IssuerRegistry) Rebuild(ctx context.Context, configs []*domain.Issuer, encryptionKey string) error {
+	newIssuers := make(map[string]IssuerConnector)
+	var errors []string
+
+	for _, cfg := range configs {
+		if !cfg.Enabled {
+			r.logger.Debug("skipping disabled issuer", "id", cfg.ID, "type", cfg.Type)
+			continue
+		}
+
+		// Determine the config JSON to use for connector instantiation.
+		// Prefer encrypted_config (decrypted) if available; fall back to config.
+		var configJSON json.RawMessage
+		if len(cfg.EncryptedConfig) > 0 {
+			decrypted, err := crypto.DecryptIfKeySet(cfg.EncryptedConfig, encryptionKey)
+			if err != nil {
+				errors = append(errors, fmt.Sprintf("issuer %s: decrypt failed: %v", cfg.ID, err))
+				continue
+			}
+			configJSON = json.RawMessage(decrypted)
+		} else if len(cfg.Config) > 0 {
+			configJSON = cfg.Config
+		} else {
+			configJSON = json.RawMessage("{}")
+		}
+
+		connector, err := issuerfactory.NewFromConfig(ctx, string(cfg.Type), configJSON, r.logger)
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("issuer %s: factory error: %v", cfg.ID, err))
+			continue
+		}
+
+		// Bundle CRL/OCSP-Responder Phase 2: when local deps are
+		// configured on the registry, inject them into every freshly-
+		// constructed *local.Connector so its SignOCSPResponse takes
+		// the dedicated responder cert path. Type-assert is the
+		// pragmatic seam — the factory returns issuer.Connector so
+		// this is the only place that knows what concrete type was
+		// just built.
+		if localConn, ok := connector.(*local.Connector); ok && r.localDeps != nil {
+			localConn.SetIssuerID(cfg.ID)
+			localConn.SetOCSPResponderRepo(r.localDeps.OCSPResponderRepo)
+			localConn.SetSignerDriver(r.localDeps.SignerDriver)
+			if r.localDeps.KeyDir != "" {
+				localConn.SetOCSPResponderKeyDir(r.localDeps.KeyDir)
+			}
+			if r.localDeps.RotationGrace > 0 {
+				localConn.SetOCSPResponderRotationGrace(r.localDeps.RotationGrace)
+			}
+			if r.localDeps.Validity > 0 {
+				localConn.SetOCSPResponderValidity(r.localDeps.Validity)
+			}
+			r.logger.Info("local issuer wired with dedicated OCSP responder deps",
+				"id", cfg.ID,
+				"key_dir", r.localDeps.KeyDir)
+		}
+
+		// Audit fix #7: when the cert-version lookup is configured on
+		// the registry, inject it into every freshly-constructed
+		// *acme.Connector so its serial-only revoke path can recover
+		// the leaf-cert DER bytes. SetIssuerID is paired so the lookup
+		// can scope by issuer per RFC 5280 §5.2.3.
+		if acmeConn, ok := connector.(*acme.Connector); ok && r.acmeCertLookup != nil {
+			acmeConn.SetIssuerID(cfg.ID)
+			acmeConn.SetCertificateLookup(r.acmeCertLookup)
+			r.logger.Info("ACME issuer wired with cert-version lookup for serial-only revoke",
+				"id", cfg.ID)
+		}
+
+		// Top-10 fix #5 (2026-05-03 audit): wire the renew-self
+		// metric recorder into every freshly-constructed
+		// *vault.Connector so its background renewal loop bumps the
+		// certctl_vault_token_renewals_total counter. Lifecycle
+		// startup itself is gated by StartLifecycles below — Rebuild
+		// only does the metric wire here so the recorder is in place
+		// when StartLifecycles fires.
+		if vaultConn, ok := connector.(*vault.Connector); ok && r.vaultRenewalMetrics != nil {
+			vaultConn.SetRenewalRecorder(r.vaultRenewalMetrics)
+			r.logger.Info("Vault PKI issuer wired with renew-self metric recorder",
+				"id", cfg.ID)
+		}
+
+		adapter := NewIssuerConnectorAdapter(connector)
+		// Wire per-issuer-type metrics (audit fix #4) when SetIssuanceMetrics
+		// was called. The adapter is the IssuerConnector interface; type-
+		// assert to the concrete *IssuerConnectorAdapter so we can call
+		// SetMetrics. Tests that hand-construct adapters via the bare
+		// NewIssuerConnectorAdapter constructor get nil metrics — the
+		// adapter no-ops the recording in that case.
+		if r.metrics != nil {
+			if a, ok := adapter.(*IssuerConnectorAdapter); ok {
+				a.SetMetrics(string(cfg.Type), r.metrics)
+			}
+		}
+		newIssuers[cfg.ID] = adapter
+		r.logger.Info("issuer loaded into registry", "id", cfg.ID, "type", cfg.Type)
+	}
+
+	// Atomic swap
+	r.mu.Lock()
+	old := r.issuers
+	r.issuers = newIssuers
+	r.mu.Unlock()
+
+	// Log changes
+	for id := range newIssuers {
+		if _, existed := old[id]; !existed {
+			r.logger.Info("issuer added to registry", "id", id)
+		}
+	}
+	for id := range old {
+		if _, exists := newIssuers[id]; !exists {
+			r.logger.Info("issuer removed from registry", "id", id)
+		}
+	}
+
+	r.logger.Info("issuer registry rebuilt", "loaded", len(newIssuers), "failed", len(errors))
+
+	if len(errors) > 0 {
+		for _, e := range errors {
+			r.logger.Warn("issuer load failure", "detail", e)
+		}
+		return fmt.Errorf("%d issuer(s) failed to load: %s", len(errors), errors[0])
+	}
+
+	return nil
+}
+
+// StartLifecycles iterates the registry and calls Start(ctx) on every
+// connector that implements the optional issuer.Lifecycle extension
+// interface. Connectors without lifecycle work (almost all of them)
+// are silently skipped.
+//
+// Top-10 fix #5 of the 2026-05-03 issuer-coverage audit. Today only
+// VaultPKI implements Lifecycle (for its renew-self loop). New
+// lifecycle-bearing connectors plug in by implementing the
+// interface — this method picks them up automatically.
+//
+// Per-connector Start failures are LOGGED, not returned, so a single
+// misconfigured Vault doesn't block server startup. Operators see
+// the failure in the slog stream and via the
+// certctl_vault_token_renewals_total{result="not_renewable"} or
+// {result="failure"} counter.
+//
+// The IssuerConnectorAdapter wraps the raw connector; we type-assert
+// against IssuerConnectorWithUnderlying to reach the underlying
+// connector. If the adapter shape changes, this assertion silently
+// no-ops and lifecycle wiring stops working — covered by
+// TestRegistry_StartLifecycles_VaultStarted.
+func (r *IssuerRegistry) StartLifecycles(ctx context.Context) {
+	r.mu.RLock()
+	conns := make(map[string]IssuerConnector, len(r.issuers))
+	for id, c := range r.issuers {
+		conns[id] = c
+	}
+	r.mu.RUnlock()
+
+	for id, c := range conns {
+		raw := unwrapAdapter(c)
+		if raw == nil {
+			continue
+		}
+		lc, ok := raw.(issuer.Lifecycle)
+		if !ok {
+			continue
+		}
+		if err := lc.Start(ctx); err != nil {
+			r.logger.Warn("issuer lifecycle Start failed",
+				"id", id,
+				"error", err,
+			)
+			continue
+		}
+		r.logger.Info("issuer lifecycle Start succeeded", "id", id)
+	}
+}
+
+// StopLifecycles iterates the registry and calls Stop() on every
+// connector that implements the optional issuer.Lifecycle extension
+// interface. Each Stop blocks until the connector's background work
+// has fully exited; the loop is sequential rather than parallel so
+// shutdown ordering is deterministic in operator logs.
+//
+// Idempotent. Safe to call after StartLifecycles failed or wasn't
+// called.
+func (r *IssuerRegistry) StopLifecycles() {
+	r.mu.RLock()
+	conns := make([]IssuerConnector, 0, len(r.issuers))
+	for _, c := range r.issuers {
+		conns = append(conns, c)
+	}
+	r.mu.RUnlock()
+
+	for _, c := range conns {
+		raw := unwrapAdapter(c)
+		if raw == nil {
+			continue
+		}
+		if lc, ok := raw.(issuer.Lifecycle); ok {
+			lc.Stop()
+		}
+	}
+}
+
+// unwrapAdapter returns the underlying issuer.Connector held by an
+// IssuerConnectorAdapter. If the registry held a raw connector
+// directly (test wiring), returns it as-is. Returns nil if neither
+// case matches — defensive against future adapter-shape changes.
+func unwrapAdapter(c IssuerConnector) interface{} {
+	if a, ok := c.(*IssuerConnectorAdapter); ok {
+		return a.Underlying()
+	}
+	if u, ok := c.(interface{ Underlying() interface{} }); ok {
+		return u.Underlying()
+	}
+	return c
+}

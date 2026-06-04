@@ -1,0 +1,172 @@
+Business Source License 1.1
+
+Parameters
+
+Licensor:             certctl LLC
+Licensed Work:        certctl
+                      The Licensed Work is © 2026 certctl LLC.
+
+Additional Use Grant: You may make use of the Licensed Work, including in
+                      production for your internal business operations and
+                      for operations that provide products or services to
+                      your own customers, provided that you may not offer
+                      the Licensed Work as a Commercial Certificate Service.
+
+                      A "Commercial Certificate Service" is any product
+                      or service that provides third parties with access
+                      to or control of any substantial set of the
+                      certificate management functionality of the Licensed
+                      Work — including but not limited to lifecycle
+                      management, discovery, monitoring, alerting, renewal
+                      automation, deployment, revocation, certificate
+                      authority operation, certificate issuance,
+                      certificate signing, or any combination thereof —
+                      where compensation, in any form, is received in
+                      connection with such access or control. This
+                      restriction applies irrespective of whether such
+                      functionality is the principal, ancillary,
+                      supporting, or one of several values provided by the
+                      product or service, and irrespective of whether the
+                      Licensed Work is presented under its original name,
+                      a modified name, or no name at all.
+
+                      For the avoidance of doubt:
+
+                      (a) you may run the Licensed Work in production to
+                          manage certificates for products or services
+                          that you offer to your customers, where the
+                          principal value of those products or services is
+                          something other than the Licensed Work's
+                          certificate management functionality (for
+                          example, you operate a banking application and
+                          use the Licensed Work internally to manage TLS
+                          certificates for that application);
+
+                      (b) for the purposes of this Additional Use Grant,
+                          "third party" excludes (i) your employees, (ii)
+                          your contractors acting on your behalf, and
+                          (iii) your Affiliates. "Affiliate" means any
+                          entity that (1) directly or indirectly controls
+                          you, (2) is directly or indirectly controlled by
+                          you, or (3) is directly or indirectly under
+                          common control with you, where "control" means
+                          either (A) ownership of more than fifty percent
+                          (50%) of the voting interests of the entity, or
+                          (B) the power to direct the management and
+                          policies of the entity, whether through voting
+                          securities, contract, or otherwise;
+
+                      (c) the restriction on offering a Commercial
+                          Certificate Service applies regardless of whether
+                          the Licensed Work is hosted, managed, embedded,
+                          bundled, or integrated with another product or
+                          service.
+
+Change Date:          March 14, 2076
+
+Change License:       Apache License, Version 2.0
+
+For information about alternative licensing arrangements for the Licensed Work,
+please contact: certctl@proton.me
+
+Notice
+
+Business Source License 1.1
+
+Terms
+
+The Licensor hereby grants you the right to copy, modify, create derivative
+works, redistribute, and make non-production use of the Licensed Work. The
+Licensor may make an Additional Use Grant, above, permitting limited production
+use.
+
+Effective on the Change Date, the Licensor hereby grants you rights under
+the terms of the Change License, and the rights granted in the paragraph
+above terminate.
+
+If your use of the Licensed Work does not comply with the requirements
+currently in effect as described in this License, you must purchase a
+commercial license from the Licensor, its affiliated entities, or authorized
+resellers, or you must refrain from using the Licensed Work. Rights granted
+under any commercial license from the Licensor are personal to the licensee
+and may not be sublicensed, transferred, assigned, or resold to any third
+party without the Licensor's prior written consent. Any attempted sublicense,
+transfer, assignment, or resale in violation of this provision is void.
+
+Restricted Activities. Notwithstanding any other provision of this License,
+you may not:
+
+  (i)   provide the Licensed Work or substantially similar functionality
+        to third parties as a hosted, managed, embedded, bundled, or
+        integrated service, except as expressly permitted in the
+        Additional Use Grant;
+
+  (ii)  move, change, disable, circumvent, or work around any license,
+        security, attribution, audit-trail, or feature-gating
+        functionality contained in the Licensed Work; or
+
+  (iii) alter or remove any license, copyright, attribution, trademark,
+        or other notice from the Licensed Work, its derivatives, or any
+        substantial portion thereof.
+
+All copies of the original and modified Licensed Work, and derivative works
+of the Licensed Work, are subject to this License. This License applies
+separately for each version of the Licensed Work and the Change Date may vary
+for each version of the Licensed Work released by Licensor.
+
+You must conspicuously display this License on each original or modified copy
+of the Licensed Work. If you receive the Licensed Work in original or
+modified form from a third party, the terms and conditions set forth in this
+License apply to your use of that work.
+
+Patent non-assertion. During the term of this License, Licensor covenants
+not to assert any patent claim that Licensor controls against any person
+whose use of the Licensed Work complies with this License, with respect to
+the Licensed Work as distributed by Licensor. This covenant terminates with
+respect to any person who initiates a patent infringement action against
+the Licensor or against any contributor to the Licensed Work.
+
+Termination and reinstatement. Any use of the Licensed Work in violation of
+this License will automatically terminate your rights under this License
+for the current and all other versions of the Licensed Work. Your rights
+are reinstated automatically if you cease the violation and provide written
+notice to the Licensor at the contact address above within thirty (30) days
+of becoming aware of the violation. If you violate this License a second
+time after such reinstatement, your rights are not subject to further
+reinstatement.
+
+Contributions. The Licensor does not accept third-party contributions to
+the Licensed Work. Any code, documentation, or other material submitted to
+the Licensor or to any repository hosting the Licensed Work is provided at
+the submitter's sole risk, confers no rights or obligations on the
+Licensor, and is not incorporated into the Licensed Work.
+
+Trademark and naming. This License does not grant you any right in any
+trademark, service mark, trade name, or logo of the Licensor or its
+Affiliates. Forks, derivative works, and modifications of the Licensed Work
+must not use the name "certctl," any name confusingly similar to "certctl,"
+or any Licensor trademark in their distributed form, marketing materials,
+package metadata, or service offerings.
+
+Governing law and venue. This License shall be governed by and construed in
+accordance with the laws of the State of Florida, USA, without giving
+effect to any choice or conflict of law provision or rule. Any dispute
+arising from or relating to this License shall be brought exclusively in
+the state or federal courts located in the State of Florida, and the
+parties consent to the personal jurisdiction of such courts.
+
+Severability. If any provision of this License is held to be invalid,
+illegal, or unenforceable in any jurisdiction, that holding does not
+affect the validity, legality, or enforceability of any other provision of
+this License, which remains in full force and effect.
+
+Survival. The disclaimers of warranty, the patent non-assertion provisions
+(with respect to acts occurring before termination), the governing-law and
+venue provisions, and this survival provision survive any termination of
+this License.
+
+TO THE EXTENT PERMITTED BY APPLICABLE LAW, THE LICENSED WORK IS PROVIDED ON
+AN "AS IS" BASIS. LICENSOR HEREBY DISCLAIMS ALL WARRANTIES AND CONDITIONS,
+EXPRESS OR IMPLIED, INCLUDING (WITHOUT LIMITATION) WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, AND
+TITLE.

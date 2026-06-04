@@ -1,0 +1,389 @@
+.PHONY: help build run test lint verify verify-deploy loadtest loadtest-scale loadtest-scale-bulk loadtest-scale-acme loadtest-scale-agent acme-cert-manager-test acme-rfc-conformance-test keycloak-integration-test okta-smoke-test benchmark-auth benchmark-auth-coldcache clean docker-up docker-down migrate-up migrate-down generate test-cover frontend-build e2e-test qa-stats
+
+# Default target - show help
+help:
+	@echo "Certctl Development Commands"
+	@echo "============================="
+	@echo ""
+	@echo "Build & Run:"
+	@echo "  make build          Build server and agent binaries"
+	@echo "  make run            Run server locally (requires DB)"
+	@echo "  make run-agent      Run agent locally"
+	@echo ""
+	@echo "Testing & Quality:"
+	@echo "  make test           Run all tests"
+	@echo "  make test-verbose   Run tests with verbose output"
+	@echo "  make lint           Run linter (golangci-lint)"
+	@echo "  make fmt            Format code with gofmt"
+	@echo "  make verify         Pre-commit gate: fmt + vet + lint + test (CI-parity)"
+	@echo "  make verify-deploy  Pre-push gate:   digest validity + OpenAPI parity + docker build smoke"
+	@echo "  make loadtest       k6 throughput run against postgres + certctl (NOT in verify; manual + cron only)"
+	@echo ""
+	@echo "Database:"
+	@echo "  make migrate-up     Run migrations (requires DB_URL)"
+	@echo "  make migrate-down   Rollback last migration"
+	@echo "  make db-seed        Seed database with test data"
+	@echo ""
+	@echo "Docker:"
+	@echo "  make docker-build   Build Docker images"
+	@echo "  make docker-up      Start Docker Compose stack"
+	@echo "  make docker-down    Stop Docker Compose stack"
+	@echo "  make docker-logs    View Docker logs"
+	@echo "  make docker-clean   Remove Docker resources"
+	@echo ""
+	@echo "Code Generation:"
+	@echo "  make generate       Run go generate"
+	@echo "  make clean          Clean build artifacts"
+	@echo ""
+
+# Build targets
+build:
+	@echo "Building server and agent..."
+	mkdir -p bin
+	CGO_ENABLED=0 go build -o bin/server ./cmd/server
+	CGO_ENABLED=0 go build -o bin/agent ./cmd/agent
+	@echo "Build complete: bin/server, bin/agent"
+
+build-server:
+	@echo "Building server..."
+	mkdir -p bin
+	CGO_ENABLED=0 go build -o bin/server ./cmd/server
+	@echo "Server build complete"
+
+build-agent:
+	@echo "Building agent..."
+	mkdir -p bin
+	CGO_ENABLED=0 go build -o bin/agent ./cmd/agent
+	@echo "Agent build complete"
+
+# Run targets
+run: build-server
+	@echo "Starting server (requires DATABASE_URL or DB_* env vars)..."
+	./bin/server
+
+run-agent: build-agent
+	@echo "Starting agent (requires SERVER_URL and API_KEY env vars)..."
+	./bin/agent
+
+# Testing targets
+test:
+	@echo "Running tests..."
+	go test ./...
+
+test-verbose:
+	@echo "Running tests with verbose output..."
+	go test -v ./...
+
+test-coverage:
+	@echo "Running tests with coverage..."
+	go test -coverprofile=coverage.out ./...
+	go tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report: coverage.html"
+
+test-cover:
+	@echo "Running tests with coverage..."
+	go test ./internal/service/... ./internal/api/handler/... ./internal/integration/... -count=1 -cover -coverprofile=coverage.out
+	@echo "Coverage report: coverage.out"
+
+# Linting targets
+lint:
+	@echo "Running golangci-lint..."
+	@which golangci-lint > /dev/null || (echo "Installing golangci-lint..." && go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest)
+	golangci-lint run ./...
+
+fmt:
+	@echo "Formatting code..."
+	go fmt ./...
+	@echo "Code formatted"
+
+vet:
+	@echo "Running go vet..."
+	go vet ./...
+
+# verify: aggregate pre-commit gate. Mirrors what CI enforces, so
+# running `make verify` locally before committing prevents the
+# class of breakages that ship green-locally / red-on-CI (e.g.
+# Bundle-9's ST1018 invisible-Unicode-literal hits, which `go vet`
+# alone cannot catch — staticcheck under golangci-lint does).
+verify:
+	@echo "==> fmt"
+	@go fmt ./... | { ! grep -q '.'; } || (echo "gofmt produced changes — commit them" && exit 1)
+	@echo "==> go vet ./..."
+	@go vet ./...
+	@echo "==> golangci-lint run ./... (incl. staticcheck ST*)"
+	@which golangci-lint > /dev/null || (echo "Installing golangci-lint..." && go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest)
+	@golangci-lint run ./... --timeout 5m
+	@echo "==> go test -short ./..."
+	@go test -short -count=1 ./...
+	@echo ""
+	@echo "verify: PASS — safe to commit"
+
+# verify-deploy: optional pre-push gate. Runs the digest-validity check,
+# the OpenAPI ↔ handler parity check, and a Docker build smoke for the
+# production images (server + agent only — fast subset for local; CI
+# builds all 4 Dockerfiles per ci-pipeline-cleanup Phase 8 / frozen
+# decision 0.10).
+#
+# Per ci-pipeline-cleanup bundle Phase 11 / frozen decision 0.13.
+verify-deploy:
+	@echo "==> Digest validity"
+	@bash scripts/ci-guards/digest-validity.sh
+	@echo "==> OpenAPI ↔ handler parity"
+	@bash scripts/ci-guards/openapi-handler-parity.sh
+	@echo "==> Docker build smoke (server + agent — fast subset)"
+	@docker build -f Dockerfile        -t certctl:verify           .
+	@docker build -f Dockerfile.agent  -t certctl-agent:verify     .
+	@echo ""
+	@echo "verify-deploy: PASS — safe to push"
+
+# Load-test harness — closes the #8 acquisition-readiness blocker from
+# the 2026-05-01 issuer coverage audit. Boots a minimal certctl stack
+# (postgres + tls-init + certctl-server) and runs k6 against the API
+# tier for ~5 minutes. Exits non-zero on any threshold breach.
+#
+# NOT in `make verify` — load tests take minutes, not seconds, and
+# don't gate per-PR signal. CI gates this behind workflow_dispatch +
+# weekly cron in .github/workflows/loadtest.yml. See
+# deploy/test/loadtest/README.md for thresholds, baseline, and how to
+# interpret a regression.
+loadtest:
+	@echo "==> spinning up postgres + certctl + k6 driver (this takes ~7m)"
+	@cd deploy/test/loadtest && docker compose up --build --abort-on-container-exit --exit-code-from k6
+	@echo ""
+	@echo "==> results landed in deploy/test/loadtest/results/"
+	@if [ -f deploy/test/loadtest/results/summary.txt ]; then cat deploy/test/loadtest/results/summary.txt; fi
+
+# Phase 8 SCALE-H2 — scale-tier load tests. Profile-gated in the
+# loadtest compose so the default `make loadtest` stays fast and
+# focused on the per-PR regression scope (API tier + connector tier).
+#
+# loadtest-scale-bulk runs the 10K-cert bulk-renew scenario.
+# loadtest-scale-acme runs the 200-VU ACME directory/nonce/ARI burst.
+# loadtest-scale-agent runs the 5K-agent heartbeat storm.
+#
+# Each target uses --exit-code-from <scenario-driver> so a threshold
+# breach surfaces as a non-zero make exit. The scale-seed init runs
+# once per invocation (idempotent via ON CONFLICT) so re-running a
+# target against the same compose stack is fine.
+loadtest-scale-bulk:
+	@echo "==> Phase 8 SCALE-H2: bulk-renewal scenario (10K cert fixture, ~6m)"
+	@cd deploy/test/loadtest && docker compose --profile scale up --build \
+	  --abort-on-container-exit --exit-code-from k6-scale-bulk
+	@echo ""
+	@echo "==> results: deploy/test/loadtest/results/summary-bulk-renewal.{json,txt}"
+	@if [ -f deploy/test/loadtest/results/summary-bulk-renewal.txt ]; then \
+	  cat deploy/test/loadtest/results/summary-bulk-renewal.txt; fi
+
+loadtest-scale-acme:
+	@echo "==> Phase 8 SCALE-H2: ACME enrollment burst (200 VU, ~6m)"
+	@cd deploy/test/loadtest && docker compose --profile scale up --build \
+	  --abort-on-container-exit --exit-code-from k6-scale-acme
+	@echo ""
+	@echo "==> results: deploy/test/loadtest/results/summary-acme-burst.{json,txt}"
+	@if [ -f deploy/test/loadtest/results/summary-acme-burst.txt ]; then \
+	  cat deploy/test/loadtest/results/summary-acme-burst.txt; fi
+
+loadtest-scale-agent:
+	@echo "==> Phase 8 SCALE-H2: agent heartbeat storm (5K agent fixture, ~6m)"
+	@cd deploy/test/loadtest && docker compose --profile scale up --build \
+	  --abort-on-container-exit --exit-code-from k6-scale-agent
+	@echo ""
+	@echo "==> results: deploy/test/loadtest/results/summary-agent-storm.{json,txt}"
+	@if [ -f deploy/test/loadtest/results/summary-agent-storm.txt ]; then \
+	  cat deploy/test/loadtest/results/summary-agent-storm.txt; fi
+
+# All three Phase 8 scenarios serially. Use the matrix in
+# .github/workflows/loadtest.yml for parallel CI runs.
+loadtest-scale: loadtest-scale-bulk loadtest-scale-acme loadtest-scale-agent
+
+# Auth Bundle 2 Phase 10 — Keycloak end-to-end OIDC integration test.
+# Boots a Keycloak container via testcontainers-go (quay.io/keycloak:25.0),
+# imports a canned realm with two groups + two users, and drives the
+# full OIDC flow against the certctl service: discovery + JWKS,
+# auth-code login, group-claim parsing, group-role mapping, session
+# mint, and JWKS rotation.
+#
+# Build-tag-gated under `integration` so `make verify` (which runs
+# go test -short) NEVER pulls in the 60-90s Keycloak boot. Requires a
+# local Docker daemon. Skips cleanly with t.Skip() when -short is set.
+keycloak-integration-test:
+	@echo "==> running Keycloak OIDC integration test (requires Docker)"
+	@go test -tags=integration -count=1 -timeout=10m \
+	  ./internal/auth/oidc/...
+
+# Auth Bundle 2 Phase 10 — optional Okta smoke test. Gated behind TWO
+# build tags (integration + okta_smoke) so it only runs when invoked
+# manually against the operator's own Okta dev tenant. Requires the
+# OKTA_ISSUER + OKTA_CLIENT_ID + OKTA_CLIENT_SECRET env vars; the test
+# t.Skip's with a clear message when any are missing. Documented in
+# internal/auth/oidc/integration_okta_smoke_test.go.
+okta-smoke-test:
+	@echo "==> running Okta smoke test (requires OKTA_ISSUER / _CLIENT_ID / _CLIENT_SECRET env vars)"
+	@go test -tags='integration okta_smoke' -count=1 -timeout=2m \
+	  ./internal/auth/oidc/...
+
+# Auth Bundle 2 Phase 14 — auth performance benchmarks. Three default-
+# tag benchmarks (session steady-state + session cold-process + oidc
+# steady-state) producing p50/p95/p99/max numbers per the auth-
+# benchmarks.md operator-doc table.
+benchmark-auth:
+	@echo "==> running auth performance benchmarks (session + oidc steady-state)"
+	@go test -bench='BenchmarkSession_|BenchmarkOIDC_SteadyState' -benchmem \
+	  -benchtime=2000x -run='^$$' \
+	  ./internal/auth/session/ ./internal/auth/oidc/
+
+# Auth Bundle 2 Phase 14 — OIDC cold-cache benchmark against a live
+# Keycloak container (requires Docker). Build-tag-gated so the
+# default-tag benchmarks above never pull in the 60-90s container
+# boot. Runs the integration test FIRST to populate the
+# sharedKeycloak fixture, then runs the benchmark.
+benchmark-auth-coldcache:
+	@echo "==> running OIDC cold-cache benchmark against live Keycloak (requires Docker)"
+	@go test -tags integration -count=1 -timeout=10m \
+	  -run TestKeycloakIntegration_RefreshKeysFetchesDiscoveryAndJWKS \
+	  -bench BenchmarkOIDC_ColdCache -benchmem -benchtime=10x \
+	  ./internal/auth/oidc/
+
+# Phase 5 — kind-driven cert-manager integration test. Requires
+# `kind`, `kubectl`, `helm`, and a local Docker daemon. Sets
+# KIND_AVAILABLE=1 so the test runs (it skips cleanly when unset, which
+# is the CI default — kind is too heavy for per-PR CI). The test
+# brings up a fresh cluster, installs cert-manager 1.15, helm-installs
+# certctl-test, applies a ClusterIssuer + Certificate, and asserts the
+# Secret lands.
+acme-cert-manager-test:
+	@echo "==> running cert-manager integration test (requires kind/kubectl/helm)"
+	@KIND_AVAILABLE=1 go test -tags=integration -count=1 -timeout=15m \
+	  ./deploy/test/acme-integration/...
+
+# Phase 5 — RFC 8555 conformance against `lego` driving the certctl
+# server. Hermetic: brings up a single certctl-server via docker
+# compose, points lego at it, runs the conformance scenarios. Skips
+# when the operator hasn't built the test image (`make docker-build`
+# first).
+acme-rfc-conformance-test:
+	@echo "==> running RFC 8555 conformance via lego"
+	@if ! command -v lego >/dev/null 2>&1; then \
+	  echo "lego not installed — go install github.com/go-acme/lego/v4/cmd/lego@latest"; \
+	  exit 1; \
+	fi
+	@cd deploy/test/loadtest && docker compose up -d certctl postgres
+	@sleep 8
+	@CERTCTL_ACME_DIR=https://localhost:8443/acme/profile/prof-test/directory \
+	  bash deploy/test/acme-integration/conformance-lego.sh
+	@cd deploy/test/loadtest && docker compose down
+
+# Database targets (requires migrate tool)
+migrate-up:
+	@echo "Running migrations..."
+	@which migrate > /dev/null || (echo "Installing migrate CLI..." && go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest)
+	migrate -path migrations -database "${DB_URL:-postgres://certctl:certctl@localhost:5432/certctl?sslmode=disable}" up
+
+migrate-down:
+	@echo "Rolling back last migration..."
+	@which migrate > /dev/null || (echo "Installing migrate CLI..." && go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest)
+	migrate -path migrations -database "${DB_URL:-postgres://certctl:certctl@localhost:5432/certctl?sslmode=disable}" down 1
+
+migrate-status:
+	@echo "Checking migration status..."
+	@which migrate > /dev/null || (echo "Installing migrate CLI..." && go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest)
+	migrate -path migrations -database "${DB_URL:-postgres://certctl:certctl@localhost:5432/certctl?sslmode=disable}" version
+
+db-seed:
+	@echo "Seeding database with test data..."
+	go run ./scripts/seed/main.go
+
+# Docker targets
+docker-build:
+	@echo "Building Docker images..."
+	docker-compose -f deploy/docker-compose.yml build
+
+docker-up:
+	@echo "Starting Docker Compose stack..."
+	docker-compose -f deploy/docker-compose.yml up -d
+	@echo "Stack running. Access server at http://localhost:8443"
+
+docker-up-dev:
+	@echo "Starting Docker Compose stack (dev mode)..."
+	docker-compose -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml up -d
+	@echo "Stack running. PgAdmin at http://localhost:5050"
+
+docker-down:
+	@echo "Stopping Docker Compose stack..."
+	docker-compose -f deploy/docker-compose.yml down
+
+docker-logs:
+	docker-compose -f deploy/docker-compose.yml logs -f
+
+docker-logs-server:
+	docker-compose -f deploy/docker-compose.yml logs -f certctl-server
+
+docker-logs-agent:
+	docker-compose -f deploy/docker-compose.yml logs -f certctl-agent
+
+docker-clean:
+	@echo "Removing Docker resources..."
+	docker-compose -f deploy/docker-compose.yml down -v
+	@echo "Cleaned up"
+
+# Code generation
+generate:
+	@echo "Running go generate..."
+	go generate ./...
+	@echo "Code generation complete"
+
+# Frontend build
+frontend-build:
+	@echo "Building frontend..."
+	cd web && npm ci && npx vite build
+	@echo "Frontend build complete"
+
+# Phase 3 TEST-M3 closure (2026-05-13): browser-driven E2E smoke
+# target. The full 15-flow suite from web/src/__tests__/e2e/README.md
+# ships in frontend-design-audit Phase 8; this target is the harness
+# wiring that lets `make e2e-test` work today.
+#
+# First-time setup: `cd web && npm install && npx playwright install --with-deps chromium`.
+# The webServer block in web/playwright.config.ts boots `npm run dev`
+# automatically; no separate `make docker-up` needed.
+e2e-test:
+	@echo "Running Playwright E2E (smoke + any *.spec.ts under web/src/__tests__/e2e/)..."
+	cd web && npx playwright test
+	@echo "E2E run complete"
+
+# qa-stats: snapshot of the test-suite size at the current commit.
+# Backend Go tests + subtests + fuzz targets + skipped sites, plus the
+# seed-data counts in migrations/seed_demo.sql. Useful before a release
+# to spot-check that no whole layer dropped off.
+qa-stats:
+	@echo "=== certctl QA Suite Stats ==="
+	@echo "Date: $$(date +%Y-%m-%d)"
+	@echo "HEAD: $$(git rev-parse HEAD 2>/dev/null || echo 'not-a-git-repo')"
+	@echo ""
+	@echo "Backend test files: $$(find . -name '*_test.go' -not -path './web/*' 2>/dev/null | wc -l | tr -d ' ')"
+	@echo "Backend Test functions: $$(find . -name '*_test.go' -not -path './web/*' 2>/dev/null | xargs grep -c '^func Test' 2>/dev/null | awk -F: '{s+=$$2} END{print s+0}')"
+	@echo "Backend t.Run subtests: $$(find . -name '*_test.go' -not -path './web/*' 2>/dev/null | xargs grep -c 't\.Run(' 2>/dev/null | awk -F: '{s+=$$2} END{print s+0}')"
+	@echo "Frontend test files: $$(find web/src -name '*.test.ts' -o -name '*.test.tsx' 2>/dev/null | wc -l | tr -d ' ')"
+	@echo "Fuzz targets: $$(grep -rE 'func Fuzz[A-Z]' --include='*_test.go' . 2>/dev/null | wc -l | tr -d ' ')"
+	@echo "t.Skip sites: $$(grep -rE 't\.Skip(Now|f)?\(' --include='*_test.go' . 2>/dev/null | wc -l | tr -d ' ')"
+	@echo "qa_test.go Part_ subtests: $$(grep -cE 't\.Run\(\"Part[0-9]+_' deploy/test/qa_test.go 2>/dev/null || echo 0)"
+	@echo "Seed unique mc-* IDs:  $$(grep -oE "mc-[a-z0-9_-]+" migrations/seed_demo.sql 2>/dev/null | sort -u | wc -l | tr -d ' ')"
+	@echo "Seed unique ag-* IDs:  $$(grep -oE "ag-[a-z0-9_-]+" migrations/seed_demo.sql 2>/dev/null | sort -u | wc -l | tr -d ' ') (incl. agent_groups; agents-table count is 13 incl. agent-demo-1 + 3 cloud sentinels + server-scanner)"
+	@echo "Seed unique iss-* IDs: $$(grep -oE "iss-[a-z0-9_-]+" migrations/seed_demo.sql 2>/dev/null | sort -u | wc -l | tr -d ' ') (issuers table count is 13)"
+	@echo "Seed unique tgt-* IDs: $$(grep -oE "tgt-[a-z0-9_-]+" migrations/seed_demo.sql 2>/dev/null | sort -u | wc -l | tr -d ' ')"
+	@echo "Seed unique nst-* IDs: $$(grep -oE "nst-[a-z0-9_-]+" migrations/seed_demo.sql 2>/dev/null | sort -u | wc -l | tr -d ' ')"
+
+# Cleanup
+clean:
+	@echo "Cleaning build artifacts..."
+	rm -rf bin/ dist/ coverage.out coverage.html
+	go clean -testcache
+	cd web && rm -rf node_modules dist
+	@echo "Cleanup complete"
+
+install-tools:
+	@echo "Installing development tools..."
+	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+	go install github.com/cosmtrek/air@latest
+	@echo "Tools installed"

@@ -1,0 +1,58 @@
+# certctl - System Architecture & Component Memory
+
+This file serves as a memory persistence index for AI Agents interacting with the `certctl` repository.
+
+## 1. System Overview
+`certctl` is a distributed certificate lifecycle management (CLM) control plane. It automates issuance, monitoring, and deployment of TLS and S/MIME certificates.
+- **certctl-server (Go)**: The central control plane serving a REST API and host for the Vite dashboard. Handles database schema migrations, issuer profiles, renewal schedules, RBAC policies, OIDC/SSO sessions, and jobs orchestration.
+- **certctl-agent (Go)**: A daemon deployed onto target hosts (e.g. web servers). It registers with the server using a bootstrap token, polls for deployment tasks, generates keys locally, requests CSR sign-offs, and deploys certs locally.
+- **web-dashboard (React + Vite + TypeScript)**: Frontend console for monitoring fleet status, managing certificates, configuring policies, and checking audit logs.
+
+## 2. Directory Layout
+- [cmd/](file:///c:/D_Disk/certctl-1/cmd): Executable entry points.
+  - `server/`: API server.
+  - `agent/`: Daemon agent.
+  - `cli/`: Command-line tool.
+  - `mcp-server/`: MCP integrations.
+- [internal/](file:///c:/D_Disk/certctl-1/internal): Core packages.
+  - `api/`: Router and endpoints (e.g. `handler/`, `middleware/`, `acme/`).
+  - `connector/`: Protocols for interacting with CAs (`issuer/`), servers (`target/`), alerts (`notifier/`), and filesystem paths (`discovery/`).
+  - `crypto/`: PKI structures, CSR handling, and encryption.
+  - `domain/`: Business entities and interfaces.
+  - `integration/`: Core functional test suites.
+- [web/](file:///c:/D_Disk/certctl-1/web): React client source, package setup, and configurations.
+- [deploy/](file:///c:/D_Disk/certctl-1/deploy): Run files.
+  - `docker-compose.yml`: Base production-shaped stack.
+  - `docker-compose.demo.yml`: Demo-mode configuration with pre-seeded data.
+  - `docker-compose.test.yml`: Testing environment containing Pebble (ACME), step-ca, NGINX target, and deploy-e2e test sidecars.
+  - `test/`: Integration test suites (Go suite `integration_test.go`, Shell script `run-test.sh`).
+  - `helm/`: Helm chart for Kubernetes deployment.
+- [migrations/](file:///c:/D_Disk/certctl-1/migrations): Schema definition files applied automatically by the server on boot.
+
+## 3. Core Architecture Rules & Constraints
+- **Database Migrations**: Built at boot time by the Go application (`postgres.RunMigrations`).
+- **Security & Fail-Closed Guardrails**:
+  - `CERTCTL_AUTH_TYPE=api-key` requires `CERTCTL_AUTH_SECRET` (minimum 32 bytes).
+  - `CERTCTL_CONFIG_ENCRYPTION_KEY` is required for encrypting credentials and must be at least 32 bytes.
+  - Demo mode (`CERTCTL_AUTH_TYPE=none` + `CERTCTL_DEMO_MODE_ACK=true`) is restricted. It requires `CERTCTL_DEMO_MODE_ACK_TS` (Unix timestamp) to be within the last 24 hours.
+- **Docker builds**: All base images are pinned with cryptographic `@sha256` digests for supply-chain safety (validated by `scripts/ci-guards/digest-validity.sh`).
+- **Vite builds**: Per-route code splitting is enforced for performance. Bundle size is budgeted via `web/.size-limit.json`.
+
+## 4. Run & Test Commands
+- **Demo Mode**:
+  `CERTCTL_DEMO_MODE_ACK_TS=$(date +%s) docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.demo.yml up -d --build`
+  `docker compose -f deploy/docker-compose.test.yml up -d --build`
+  `go test -tags integration ./deploy/test/...`
+
+## 5. Deployment Context: Internal/Air-gapped Networks
+- **Thật sự cần thiết (Necessary):**
+  - **Private PKI:** Local CA, hoặc kết nối ADCS, Step-CA, Vault PKI.
+  - **Internal Deployments:** Triển khai chứng chỉ tự động tới NGINX, Apache, IIS, F5 BIG-IP, Kubernetes Secrets, SSH, HAProxy, Java Keystore.
+  - **Local Protocols:** Chạy ACME, SCEP, EST server nội bộ cho mạng LAN.
+  - **Security:** Phân quyền (RBAC), Duyệt 2 lớp (Approval Workflow).
+  - **On-prem Integrations:** SSO qua Keycloak/Authentik (tự host), Cảnh báo (Alerts) qua Webhook/Email SMTP nội bộ, Quét mạng nội bộ (Network Scanner).
+- **Không cần thiết (Unnecessary):**
+  - Public CA (Let's Encrypt, ZeroSSL).
+  - Cloud Providers Deployments (AWS ACM, Azure Key Vault, GCP Secret Manager).
+  - Public IdP SSO (Google Workspace, Auth0, Okta).
+  - SaaS Alerts (Slack, PagerDuty, OpsGenie).

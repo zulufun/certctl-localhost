@@ -1,0 +1,436 @@
+name: Release
+
+# Override the auto-generated run name (which would otherwise default to
+# the most recent commit subject + a #NN run number) so the Actions tab
+# shows "Release v2.0.69" instead of "chore: rename Go module path... #73".
+# `github.ref_name` resolves to the tag name (e.g., `v2.0.69`) for tag-triggered
+# workflows, which is the only trigger we set below.
+run-name: Release ${{ github.ref_name }}
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  REGISTRY: ghcr.io
+  # Keep in lock-step with .github/workflows/ci.yml (M-3).
+  GO_VERSION: '1.25.10'
+  IMAGE_NAMESPACE: certctl-io
+
+jobs:
+  # ----------------------------------------------------------------------
+  # build-binaries (M-3): matrix build every (binary × OS × arch) tuple.
+  # For each tuple we produce: the binary, a SPDX-JSON SBOM, a keyless
+  # Cosign signature + certificate bundle, and a single-line sha256sum
+  # file. All artefacts are uploaded to a workflow-scoped artifact; the
+  # aggregate-checksums job fans them back in for release upload.
+  # ----------------------------------------------------------------------
+  build-binaries:
+    name: Build ${{ matrix.binary }} (${{ matrix.os }}/${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write  # Cosign keyless OIDC identity token
+    strategy:
+      fail-fast: false
+      matrix:
+        binary: [agent, server, cli, mcp-server]
+        os: [linux, darwin]
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      - name: Install govulncheck
+        # Bundle D / Audit L-008: release.yml previously had no vulnerability
+        # scan, so a release tag could in principle ship a binary with a
+        # known CVE in transitive deps that ci.yml's govulncheck would have
+        # caught on master. Pre-build scan blocks the release if anything
+        # surfaced post-merge. Pinned to the same major as ci.yml.
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck (release gate)
+        # govulncheck distinguishes called-vs-uncalled vulnerable functions.
+        # Default exit code (0 unless an actual call site lands in a vuln
+        # function) is the right gate for release; deferred-call advisories
+        # are tracked separately on master via L-021. If a release-time
+        # scan surfaces a NEW called-vuln, the release is blocked until the
+        # bump lands on master and a new tag is cut.
+        run: govulncheck ./...
+
+      - name: Build binary
+        id: build
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: '0'
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          set -euo pipefail
+          OUTPUT_NAME="certctl-${{ matrix.binary }}-${{ matrix.os }}-${{ matrix.arch }}"
+          mkdir -p dist
+          go build \
+            -trimpath \
+            -ldflags="-w -s -X main.Version=${VERSION}" \
+            -o "dist/${OUTPUT_NAME}" \
+            "./cmd/${{ matrix.binary }}"
+          ls -lh "dist/${OUTPUT_NAME}"
+          echo "output_name=${OUTPUT_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate SBOM (SPDX-JSON)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610  # v0.24.0
+        with:
+          file: dist/${{ steps.build.outputs.output_name }}
+          format: spdx-json
+          output-file: dist/${{ steps.build.outputs.output_name }}.sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003  # v4.1.1
+
+      - name: Keyless-sign binary with Cosign
+        env:
+          OUTPUT_NAME: ${{ steps.build.outputs.output_name }}
+        run: |
+          set -euo pipefail
+          # Cosign v3.0 (shipped by cosign-installer@v4.1.1 default
+          # cosign-release=v3.0.5) removed --output-signature/--output-certificate
+          # on sign-blob. The replacement is --bundle, which emits a unified
+          # Sigstore bundle (signature + cert chain + Rekor inclusion proof) as
+          # a single .sigstore.json artefact. M-11.
+          cosign sign-blob \
+            --yes \
+            --bundle "dist/${OUTPUT_NAME}.sigstore.json" \
+            "dist/${OUTPUT_NAME}"
+
+      - name: Compute SHA-256 sidecar
+        env:
+          OUTPUT_NAME: ${{ steps.build.outputs.output_name }}
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum "${OUTPUT_NAME}" > "${OUTPUT_NAME}.sha256"
+          cat "${OUTPUT_NAME}.sha256"
+
+      - name: Upload build artefacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: binary-${{ steps.build.outputs.output_name }}
+          path: |
+            dist/${{ steps.build.outputs.output_name }}
+            dist/${{ steps.build.outputs.output_name }}.sigstore.json
+            dist/${{ steps.build.outputs.output_name }}.sbom.spdx.json
+            dist/${{ steps.build.outputs.output_name }}.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  # ----------------------------------------------------------------------
+  # aggregate-checksums (M-3): fan in every matrix artefact, produce a
+  # single checksums.txt (sha256sum format, compatible with `sha256sum
+  # -c`), sign it with Cosign, upload everything to the GitHub Release,
+  # and emit a base64-encoded hash manifest for the SLSA generator.
+  # ----------------------------------------------------------------------
+  aggregate-checksums:
+    name: Aggregate checksums & sign
+    runs-on: ubuntu-latest
+    needs: [build-binaries]
+    permissions:
+      contents: write
+      id-token: write  # Cosign keyless OIDC identity token
+    outputs:
+      hashes: ${{ steps.hashes.outputs.hashes }}
+    steps:
+      - name: Download binary artefacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          pattern: binary-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Aggregate SHA-256 sums
+        id: hashes
+        run: |
+          set -euo pipefail
+          cd artifacts
+          : > checksums.txt
+          for f in certctl-*; do
+            case "$f" in
+              *.sigstore.json|*.sbom.spdx.json|*.sha256|checksums.txt)
+                continue ;;
+            esac
+            sha256sum "$f" >> checksums.txt
+          done
+          echo "=== checksums.txt ==="
+          cat checksums.txt
+          # base64 hashes (single line, no wrapping) for SLSA generator.
+          HASHES=$(base64 -w0 < checksums.txt)
+          echo "hashes=${HASHES}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003  # v4.1.1
+
+      - name: Keyless-sign checksums.txt
+        run: |
+          set -euo pipefail
+          cd artifacts
+          # Cosign v3.0 --bundle replaces the removed v2 flag pair
+          # --output-signature / --output-certificate. See M-11.
+          cosign sign-blob \
+            --yes \
+            --bundle checksums.txt.sigstore.json \
+            checksums.txt
+
+      - name: Upload artefacts to GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            artifacts/certctl-*
+            artifacts/checksums.txt
+            artifacts/checksums.txt.sigstore.json
+
+  # ----------------------------------------------------------------------
+  # provenance-binaries (M-3): SLSA Level 3 provenance for every binary.
+  # The SLSA generic generator reusable workflow runs in a hermetic
+  # workflow run, producing multiple.intoto.jsonl from the base64 hash
+  # manifest and uploading it as a release asset.
+  # ----------------------------------------------------------------------
+  provenance-binaries:
+    name: SLSA provenance (binaries)
+    needs: [aggregate-checksums]
+    permissions:
+      actions: read
+      id-token: write
+      contents: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@f7dd8c54c2067bafc12ca7a55595d5ee9b75204a  # v2.1.0
+    with:
+      base64-subjects: "${{ needs.aggregate-checksums.outputs.hashes }}"
+      upload-assets: true
+      provenance-name: multiple.intoto.jsonl
+      # Phase 1 RED-2 compat (2026-05-14): the SLSA reusable workflow's
+      # default path downloads a pre-built generator binary from a
+      # GitHub *release* of slsa-framework/slsa-github-generator —
+      # releases are keyed by tag name (vX.Y.Z), and the workflow
+      # rejects SHA-form refs with "Expected ref of the form
+      # refs/tags/vX.Y.Z". Phase 1 RED-2 SHA-pinned every Actions
+      # uses: line, so the default path errors out. Setting
+      # compile-generator: true instead builds the generator from the
+      # pinned-SHA source inside the workflow run — preserves
+      # supply-chain integrity (SHA pin retained), adds ~1 min build
+      # time. This is the SLSA project's documented escape hatch for
+      # SHA-pinned reusable-workflow consumers.
+      compile-generator: true
+
+  # ----------------------------------------------------------------------
+  # build-and-push-docker: push container images to GHCR with native
+  # SLSA L3 provenance (mode=max) and SBOM attestations emitted by
+  # docker/build-push-action@v6, plus a keyless Cosign signature on the
+  # image digest for identity-bound verification. The M-4 proxy-propagation
+  # build-args block is retained verbatim — M-3 only adds supply-chain
+  # steps; it never touches M-4 wiring.
+  # ----------------------------------------------------------------------
+  build-and-push-docker:
+    name: Build & Push Docker Images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      id-token: write  # Cosign keyless OIDC identity token
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003  # v4.1.1
+
+      - name: Build and push server image
+        id: server-push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/certctl-server:${{ steps.version.outputs.VERSION }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/certctl-server:latest
+          # Proxy propagation (M-4, Issue #9) — forwards runner-level proxy
+          # secrets into the Docker build so self-hosted runners behind
+          # corporate proxies can reach public registries. GitHub-hosted
+          # runners don't need proxies, so the secrets are optional and
+          # resolve to empty strings when unset — byte-identical to the
+          # pre-fix behaviour for the public-runner path.
+          build-args: |
+            HTTP_PROXY=${{ secrets.HTTP_PROXY }}
+            HTTPS_PROXY=${{ secrets.HTTPS_PROXY }}
+            NO_PROXY=${{ secrets.NO_PROXY }}
+          # Supply-chain hardening (M-3): emit native SLSA L3 provenance
+          # and SBOM attestations bound to the image manifest.
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Keyless-sign server image with Cosign
+        env:
+          DIGEST: ${{ steps.server-push.outputs.digest }}
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/certctl-server
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      - name: Build and push agent image
+        id: agent-push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context: .
+          file: ./Dockerfile.agent
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/certctl-agent:${{ steps.version.outputs.VERSION }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/certctl-agent:latest
+          # Proxy propagation (M-4, Issue #9) — see server-image step for
+          # rationale. Empty secrets resolve to empty build args, leaving
+          # the un-proxied code path byte-identical to the pre-fix tree.
+          build-args: |
+            HTTP_PROXY=${{ secrets.HTTP_PROXY }}
+            HTTPS_PROXY=${{ secrets.HTTPS_PROXY }}
+            NO_PROXY=${{ secrets.NO_PROXY }}
+          # Supply-chain hardening (M-3): emit native SLSA L3 provenance
+          # and SBOM attestations bound to the image manifest.
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Keyless-sign agent image with Cosign
+        env:
+          DIGEST: ${{ steps.agent-push.outputs.digest }}
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/certctl-agent
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${IMAGE}@${DIGEST}"
+
+  # ----------------------------------------------------------------------
+  # create-release: stamp the release body. The actual asset uploads are
+  # handled by aggregate-checksums (binaries, SBOMs, sigs, certs,
+  # checksums.txt + signature) and the SLSA generator (multiple.intoto.jsonl).
+  # ----------------------------------------------------------------------
+  create-release:
+    name: Create Release Notes
+    runs-on: ubuntu-latest
+    needs: [build-binaries, aggregate-checksums, provenance-binaries, build-and-push-docker]
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      - name: Create release with notes
+        # generate_release_notes: true asks GitHub to auto-generate the
+        # "What's Changed" section from PRs+commits between this tag and the
+        # previous one. The hardcoded body below appends a per-release
+        # supply-chain verification block (Cosign / SLSA / SBOM steps with the
+        # current version baked into the commands) plus a single link to the
+        # README's Quick Start section for install/upgrade instructions.
+        # We deliberately do NOT duplicate install instructions here — the
+        # README is the source of truth for those, and inlining them in every
+        # release page produces the kind of "every release looks identical"
+        # noise that gives operators no signal about what actually changed.
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
+        with:
+          # Pin the release title to the tag name. softprops/action-gh-release@v2
+          # falls back to the most recent commit subject when `name:` is omitted,
+          # which produces ugly titles like "chore: rename Go module path..." on
+          # the Releases page. `github.ref_name` evaluates to the tag (`v2.0.69`).
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          body: |
+            > **Install / upgrade:** see the [Quick Start section in the README](https://github.com/zulufun/certctl-localhost/blob/master/README.md#quick-start) for Docker Compose, agent install, Helm, and binary download instructions.
+
+            ## Verifying this release
+
+            Every binary, `checksums.txt`, and container image is signed with Cosign
+            keyless OIDC. Each binary ships with a SPDX-JSON SBOM. Binaries are covered
+            by SLSA Level 3 provenance; container images carry native SLSA L3 provenance
+            and SBOM attestations (docker/build-push-action `provenance: mode=max`,
+            `sbom: true`) in addition to a Cosign signature on the digest.
+
+            **1. Verify SHA-256 checksums:**
+
+            ```bash
+            sha256sum -c checksums.txt
+            ```
+
+            **2. Verify the Cosign signature on checksums.txt (keyless OIDC):**
+
+            ```bash
+            cosign verify-blob \
+              --bundle checksums.txt.sigstore.json \
+              --certificate-identity-regexp '^https://github\.com/certctl-io/certctl/\.github/workflows/release\.yml@refs/tags/' \
+              --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+              checksums.txt
+            ```
+
+            Replace `checksums.txt` with any individual binary name to verify that
+            artefact directly (each binary ships with its own `.sigstore.json`
+            bundle, e.g. `cosign verify-blob --bundle certctl-agent-linux-amd64.sigstore.json …`).
+
+            **3. Verify SLSA Level 3 provenance (binaries):**
+
+            ```bash
+            slsa-verifier verify-artifact \
+              --provenance-path multiple.intoto.jsonl \
+              --source-uri github.com/zulufun/certctl-localhost \
+              --source-tag ${{ steps.version.outputs.VERSION }} \
+              certctl-agent-linux-amd64
+            ```
+
+            **4. Verify container image signature and attestations:**
+
+            ```bash
+            IMAGE=ghcr.io/certctl-io/certctl-server:${{ steps.version.outputs.VERSION }}
+            cosign verify \
+              --certificate-identity-regexp '^https://github\.com/certctl-io/certctl/\.github/workflows/release\.yml@refs/tags/' \
+              --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+              "$IMAGE"
+
+            # SBOM attestation (SPDX-JSON) emitted by docker/build-push-action
+            cosign verify-attestation --type spdxjson \
+              --certificate-identity-regexp '^https://github\.com/certctl-io/certctl/' \
+              --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+              "$IMAGE"
+
+            # SLSA provenance attestation (mode=max)
+            cosign verify-attestation --type slsaprovenance \
+              --certificate-identity-regexp '^https://github\.com/certctl-io/certctl/' \
+              --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+              "$IMAGE"
+            ```

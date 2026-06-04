@@ -1,0 +1,229 @@
+# Coverage floors per gated package.
+#
+# Each entry: floor: <integer percentage>, why: <load-bearing context>.
+# Adding a new gated package: one entry here; CI's `Check Coverage Thresholds`
+# step auto-picks up. Lowering a floor REQUIRES corresponding code-side test
+# work — never lower the gate to make CI green.
+#
+# Per ci-pipeline-cleanup bundle Phase 2 / frozen decision 0.3.
+
+internal/service:
+  floor: 70
+  why: |
+    Bundle R-CI-extended raise (post-Bundle-N.C-extended): service
+    55 → 70. HEAD 73.4% (3pp margin). Prescribed Bundle R target
+    was 80; held lower to avoid false-positives on single low-
+    coverage files dragging the global per-file-average down.
+
+internal/api/handler:
+  floor: 75
+  why: |
+    Bundle R-CI-extended raise: handler 60 → 75. HEAD 79.8% (4pp
+    margin). Prescribed Bundle R target was 80; held lower for
+    same reason as service layer.
+
+internal/domain:
+  floor: 40
+  why: |
+    Domain layer is mostly type definitions + validators; 40% is
+    the load-bearing-paths floor.
+
+internal/api/middleware:
+  floor: 30
+  why: |
+    Middleware coverage is per-handler-test-driven. 30% is the
+    floor that catches the wired-up middleware paths; the
+    unwired paths (alternative auth providers not currently
+    enabled) sit below.
+
+internal/crypto:
+  floor: 88
+  why: |
+    Bundle R closure CI checkpoint #3: crypto floor lifted 85 → 88.
+    Post-Bundle-Q package-scoped coverage at HEAD: 88.2%. The
+    remaining ~12% gap is platform-failure branches (rand.Reader /
+    aes.NewCipher) that require interface seams the production
+    code doesn't use; closing them is tracked as R-CI-extended,
+    not Bundle R scope.
+
+internal/connector/issuer/local:
+  floor: 86
+  why: |
+    Bundle R closure CI checkpoint #3: local-issuer floor lifted
+    85 → 86. Post-Bundle-Q package-scoped coverage at HEAD: 86.7%.
+    The prescribed Bundle R target was 92, but reaching it
+    requires interface seams for crypto/x509 signing-error
+    branches — tracked as R-CI-extended.
+
+internal/connector/issuer/acme:
+  floor: 80
+  why: |
+    Bundle R-CI-extended threshold raise (post-Bundle-J-extended):
+    ACME 50 → 80. The Pebble-style mock + per-CA failure tests
+    lift package-scoped ACME to 85.4%; gate at 80 with 5pp margin
+    to absorb the global-run per-file-average dip.
+
+internal/connector/issuer/stepca:
+  floor: 80
+  why: |
+    Bundle L.B / Coverage-Audit C-005 — StepCA failure-mode + JWE
+    round-trip tests lift package from 52.1% to 90.4% (per-package
+    run). Floor at 80 with margin.
+
+internal/mcp:
+  floor: 85
+  why: |
+    Bundle K / Coverage-Audit C-002 — MCP per-tool dispatch via
+    in-memory transport lifts package from 28.0% to 93.1% (per-
+    package run). Floor at 85.
+
+internal/auth:
+  floor: 85
+  why: |
+    Bundle 1 Phase 12 — RBAC primitive coverage gate.
+    internal/auth ships keystore + middleware + RequirePermission +
+    bootstrap + the Phase-3 context keys + the protocol-endpoint
+    allowlist. Negative-test coverage (no actor → 401, no role →
+    403, wrong scope → 403, bootstrap-token-wrong → 401, bootstrap-
+    used-twice → 410, admin-already-exists → 410, zero-length token
+    rejection) is now in place. Prescribed Bundle 1 target was 90;
+    held at 85 to absorb the per-file-average dip from the
+    middleware shim files (testfixtures.go) which CI runs but only
+    test fixtures exercise. Sub-package internal/auth/bootstrap
+    inherits this floor.
+
+internal/service/auth:
+  floor: 85
+  why: |
+    Bundle 1 Phase 12 — RBAC service-layer coverage gate.
+    PermissionService + RoleService + ActorRoleService + Authorizer
+    each have positive + negative tests covering the
+    privilege-escalation guard (auth.role.assign required for
+    Grant/Revoke), the reserved-actor invariant (actor-demo-anon
+    cannot be mutated), the canonical-permission validation, the
+    role-in-use guard on Delete, and every sentinel-error path
+    (ErrUnauthenticated / ErrForbidden / ErrSelfRoleAssignment /
+    ErrAuthReservedActor / ErrAuthUnknownPermission /
+    ErrAuthRoleInUse).
+
+internal/auth/oidc:
+  floor: 90
+  why: |
+    Bundle 2 Phase 3 — OIDC service coverage gate. Phase 3 spec
+    pins the floor at 90 explicitly because every fail-closed
+    branch is load-bearing for the security posture: alg pinning
+    (deny-list HS*/none + allow-list RS*/ES*/EdDSA), audience
+    re-check, azp enforcement on multi-aud tokens, at_hash
+    REQUIRED-when-access-token-present (Phase 3 lifts the OIDC
+    core "MAY" to a service-level "MUST"), iat-window window,
+    nonce constant-time-compare, single-use state replay defense,
+    PKCE-S256 mandatory, IdP downgrade-attack defense at
+    provider-load + RefreshKeys time, JWKS-fail-closed semantics,
+    group-claim resolution + userinfo-fallback fail-closed
+    semantics, token-leak hygiene. A regression in any one of
+    these branches is a security incident; the floor catches it
+    before the commit lands. The mock-IdP fixture in
+    service_test.go is the load-bearing harness.
+
+internal/auth/oidc/groupclaim:
+  floor: 95
+  why: |
+    Bundle 2 Phase 3 — group-claim resolver. Hand-rolled (no
+    JSON-path dep per Decision 10); ~150 LOC, every branch
+    exercised by 19 unit tests covering the documented IdP shapes
+    (Okta string array, Keycloak realm_access.roles, Auth0
+    namespaced URL claim, single-string normalization,
+    deeply-nested 3-segment walks) plus every fail-closed branch
+    (empty path, missing key, missing nested key, non-object
+    intermediate, bool/number/object/nil values, array with
+    non-string element, URL-shape with dots-in-path treated as
+    literal). Resolver should be at 100%; floor at 95 leaves a
+    1-statement margin for future error-message refactors.
+
+internal/auth/oidc/domain:
+  floor: 90
+  why: |
+    Bundle 2 Phase 1 — OIDCProvider + GroupRoleMapping domain.
+    Validation-heavy package; constructors + Validate methods
+    cover all canonical IdP shapes (Okta / Azure AD / Google
+    Workspace / Keycloak / Authentik / Auth0). Floor at 90 to
+    catch any future field that ships without a validator.
+
+internal/auth/session:
+  floor: 90
+  why: |
+    Bundle 2 Phase 4 — session lifecycle service. Phase 4 spec
+    pins the floor at 90 because every fail-closed branch carries
+    a security invariant: HMAC-SHA256 cookie signing with a
+    LENGTH-PREFIXED canonical input (defeats the
+    `<a, bc>`-vs-`<ab, c>` concatenation collision attack on the
+    bare-concat form), v1. version-prefix lock, idle expiry,
+    absolute expiry, revocation, retired-but-in-retention key
+    success path, retired-past-retention failure path, CSRF
+    constant-time compare against the SHA-256-hashed copy on the
+    session row, optional IP/UA-bind defense-in-depth gates,
+    fail-fatal initial-key bootstrap. A regression in any one of
+    these branches is a security incident; the floor catches it
+    before the commit lands. The 15-case negative-test matrix in
+    service_test.go is the load-bearing harness; the in-memory
+    stubs of SessionRepo + SigningKeyRepo + AuditRecorder let the
+    state machine be exercised without the postgres testcontainer
+    overhead (which Phase 2's integration tests already cover).
+
+internal/auth/session/domain:
+  floor: 90
+  why: |
+    Bundle 2 Phase 1 — Session + SessionSigningKey domain. Both
+    types ship Validate() with full invariant coverage: ID prefix
+    enforcement (ses-/sk-), expiry-order CHECK (absolute > idle >
+    created), CSRFTokenHash format pin (64 lowercase hex chars),
+    KeyMaterialEncrypted non-empty, retired-before-created
+    rejection, TenantID defaulting. Cookie naming constants are
+    pinned by TestCookieNamingConstants because the GUI's
+    web/src/api/client.ts will read `certctl_csrf` by string.
+    Floor at 90 to catch any future field that ships without a
+    validator.
+
+internal/auth/breakglass:
+  floor: 90
+  why: |
+    Bundle 2 Phase 7.5 — break-glass admin service (Argon2id +
+    lockout state machine + constant-time-via-verifyDummy). Phase
+    13 Pre-merge audit: floor at 90 with no carve-out. Phase 7.5
+    spec ships the package at 91.5%, validated by 8 mandated
+    negatives + ~12 coverage-lift tests. Every fail-closed branch
+    is load-bearing for the security surface (default-OFF posture
+    only matters if every "disabled" path returns ErrDisabled
+    BEFORE any DB lookup; constant-time defense only matters if
+    every path goes through verifyDummy on the no-credential leg).
+    A regression that drops a fail-closed branch's coverage below
+    90 is a real security risk — gate trips, operator audits.
+
+internal/auth/breakglass/domain:
+  floor: 90
+  why: |
+    Bundle 2 Phase 1 — BreakglassCredential domain. Argon2id PHC
+    format pinned ($argon2id$ prefix), MinPasswordLengthBytes (12)
+    + MaxPasswordLengthBytes (256) constants pinned by dedicated
+    test, IsLocked(now) state machine helper. The package ships
+    at 100% coverage; floor at 90 is the standing-room floor for
+    any future field added without a validator.
+
+internal/auth/user/domain:
+  floor: 90
+  why: |
+    Bundle 2 Phase 1 — User domain (federated-human identity).
+    OIDCSubject + OIDCProviderID unique-index per the Phase 2
+    schema, WebAuthnCredentials JSONB reserved for v3, Validate()
+    enforces every on-disk invariant. The package ships at 96.4%
+    coverage. Floor at 90 to catch any future field added without
+    a validator.
+
+    Phase 13 prompt explicitly enumerates internal/auth/user/ at
+    floor 90. The parent (non-domain) directory has no Go source —
+    the user upsert lives in internal/auth/oidc/service.go alongside
+    group resolution + role mapping (cohesive sequence within the
+    OIDC callback). Splitting upsertUser into a separate
+    internal/auth/user/ service package would harm cohesion without
+    adding test value; the domain layer's invariant coverage is
+    where the floor actually applies.

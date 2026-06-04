@@ -1,0 +1,749 @@
+// Copyright 2026 certctl LLC. All rights reserved.
+// SPDX-License-Identifier: BUSL-1.1
+
+package mcp
+
+// Input types for MCP tool arguments.
+// The jsonschema struct tags provide descriptions for LLM tool discovery.
+
+// ── Pagination ──────────────────────────────────────────────────────
+
+type ListParams struct {
+	Page    int `json:"page,omitempty" jsonschema:"Page number (default 1)"`
+	PerPage int `json:"per_page,omitempty" jsonschema:"Results per page (default 50, max 500)"`
+}
+
+// ── Certificates ────────────────────────────────────────────────────
+
+type ListCertificatesInput struct {
+	ListParams
+	Status      string `json:"status,omitempty" jsonschema:"Filter by status: Pending, Active, Expiring, Expired, RenewalInProgress, Failed, Revoked, Archived"`
+	Environment string `json:"environment,omitempty" jsonschema:"Filter by environment"`
+	OwnerID     string `json:"owner_id,omitempty" jsonschema:"Filter by owner ID"`
+	TeamID      string `json:"team_id,omitempty" jsonschema:"Filter by team ID"`
+	IssuerID    string `json:"issuer_id,omitempty" jsonschema:"Filter by issuer ID"`
+}
+
+type GetByIDInput struct {
+	ID string `json:"id" jsonschema:"Resource ID (e.g. mc-api-prod, t-platform)"`
+}
+
+type CreateCertificateInput struct {
+	ID              string            `json:"id,omitempty" jsonschema:"Certificate ID (auto-generated if empty)"`
+	Name            string            `json:"name" jsonschema:"Display name"`
+	CommonName      string            `json:"common_name" jsonschema:"Certificate common name (e.g. api.example.com)"`
+	SANs            []string          `json:"sans,omitempty" jsonschema:"Subject Alternative Names"`
+	Environment     string            `json:"environment,omitempty" jsonschema:"Environment (e.g. production, staging)"`
+	OwnerID         string            `json:"owner_id" jsonschema:"Owner ID (required)"`
+	TeamID          string            `json:"team_id" jsonschema:"Team ID (required)"`
+	IssuerID        string            `json:"issuer_id" jsonschema:"Issuer connector ID"`
+	TargetIDs       []string          `json:"target_ids,omitempty" jsonschema:"Deployment target IDs"`
+	RenewalPolicyID string            `json:"renewal_policy_id" jsonschema:"Renewal policy ID (required)"`
+	ProfileID       string            `json:"certificate_profile_id,omitempty" jsonschema:"Certificate profile ID"`
+	Tags            map[string]string `json:"tags,omitempty" jsonschema:"Key-value tags"`
+}
+
+type UpdateCertificateInput struct {
+	ID              string            `json:"id" jsonschema:"Certificate ID to update"`
+	Name            string            `json:"name,omitempty" jsonschema:"Display name"`
+	Environment     string            `json:"environment,omitempty" jsonschema:"Environment"`
+	OwnerID         string            `json:"owner_id,omitempty" jsonschema:"Owner ID"`
+	TeamID          string            `json:"team_id,omitempty" jsonschema:"Team ID"`
+	TargetIDs       []string          `json:"target_ids,omitempty" jsonschema:"Deployment target IDs"`
+	RenewalPolicyID string            `json:"renewal_policy_id,omitempty" jsonschema:"Renewal policy ID"`
+	ProfileID       string            `json:"certificate_profile_id,omitempty" jsonschema:"Certificate profile ID"`
+	Tags            map[string]string `json:"tags,omitempty" jsonschema:"Key-value tags"`
+}
+
+type TriggerDeploymentInput struct {
+	ID       string `json:"id" jsonschema:"Certificate ID"`
+	TargetID string `json:"target_id,omitempty" jsonschema:"Optional specific target ID"`
+}
+
+type RevokeCertificateInput struct {
+	ID     string `json:"id" jsonschema:"Certificate ID to revoke"`
+	Reason string `json:"reason,omitempty" jsonschema:"RFC 5280 reason: unspecified, keyCompromise, caCompromise, affiliationChanged, superseded, cessationOfOperation, certificateHold, privilegeWithdrawn"`
+}
+
+type BulkRevokeCertificatesInput struct {
+	Reason         string   `json:"reason" jsonschema:"RFC 5280 reason: unspecified, keyCompromise, caCompromise, affiliationChanged, superseded, cessationOfOperation, certificateHold, privilegeWithdrawn"`
+	ProfileID      string   `json:"profile_id,omitempty" jsonschema:"Revoke all certs matching this profile ID"`
+	OwnerID        string   `json:"owner_id,omitempty" jsonschema:"Revoke all certs owned by this owner"`
+	AgentID        string   `json:"agent_id,omitempty" jsonschema:"Revoke all certs deployed via this agent"`
+	IssuerID       string   `json:"issuer_id,omitempty" jsonschema:"Revoke all certs issued by this issuer"`
+	TeamID         string   `json:"team_id,omitempty" jsonschema:"Revoke all certs owned by members of this team"`
+	CertificateIDs []string `json:"certificate_ids,omitempty" jsonschema:"Explicit list of certificate IDs to revoke"`
+}
+
+// BulkRenewCertificatesInput is the MCP tool input for bulk-renew (L-1
+// master closure, cat-l-fa0c1ac07ab5). Mirrors BulkRevokeCertificatesInput
+// field-for-field minus Reason.
+type BulkRenewCertificatesInput struct {
+	ProfileID      string   `json:"profile_id,omitempty" jsonschema:"Renew all certs matching this profile ID"`
+	OwnerID        string   `json:"owner_id,omitempty" jsonschema:"Renew all certs owned by this owner"`
+	AgentID        string   `json:"agent_id,omitempty" jsonschema:"Renew all certs deployed via this agent"`
+	IssuerID       string   `json:"issuer_id,omitempty" jsonschema:"Renew all certs issued by this issuer"`
+	TeamID         string   `json:"team_id,omitempty" jsonschema:"Renew all certs owned by members of this team"`
+	CertificateIDs []string `json:"certificate_ids,omitempty" jsonschema:"Explicit list of certificate IDs to renew"`
+}
+
+// BulkReassignCertificatesInput is the MCP tool input for bulk-reassign
+// (L-2 closure, cat-l-8a1fb258a38a). IDs-only — no criteria-mode.
+type BulkReassignCertificatesInput struct {
+	CertificateIDs []string `json:"certificate_ids" jsonschema:"Explicit list of certificate IDs to reassign"`
+	OwnerID        string   `json:"owner_id" jsonschema:"Required. New owner_id for every cert in certificate_ids"`
+	TeamID         string   `json:"team_id,omitempty" jsonschema:"Optional. When non-empty, also updates team_id on every cert"`
+}
+
+type ListVersionsInput struct {
+	ID string `json:"id" jsonschema:"Certificate ID"`
+	ListParams
+}
+
+// ── CRL & OCSP ──────────────────────────────────────────────────────
+
+type GetDERCRLInput struct {
+	IssuerID string `json:"issuer_id" jsonschema:"Issuer ID for DER-encoded CRL"`
+}
+
+type OCSPInput struct {
+	IssuerID string `json:"issuer_id" jsonschema:"Issuer ID"`
+	Serial   string `json:"serial" jsonschema:"Hex-encoded certificate serial number"`
+}
+
+// ── Issuers ─────────────────────────────────────────────────────────
+
+type CreateIssuerInput struct {
+	ID      string      `json:"id,omitempty" jsonschema:"Issuer ID"`
+	Name    string      `json:"name" jsonschema:"Issuer display name"`
+	Type    string      `json:"type" jsonschema:"Issuer type: ACME, GenericCA, StepCA"`
+	Config  interface{} `json:"config,omitempty" jsonschema:"Issuer-specific configuration"`
+	Enabled bool        `json:"enabled,omitempty" jsonschema:"Whether the issuer is enabled"`
+}
+
+type UpdateIssuerInput struct {
+	ID      string      `json:"id" jsonschema:"Issuer ID to update"`
+	Name    string      `json:"name,omitempty" jsonschema:"Issuer display name"`
+	Type    string      `json:"type,omitempty" jsonschema:"Issuer type"`
+	Config  interface{} `json:"config,omitempty" jsonschema:"Issuer-specific configuration"`
+	Enabled *bool       `json:"enabled,omitempty" jsonschema:"Whether the issuer is enabled"`
+}
+
+// ── Targets ─────────────────────────────────────────────────────────
+
+type CreateTargetInput struct {
+	ID      string      `json:"id,omitempty" jsonschema:"Target ID"`
+	Name    string      `json:"name" jsonschema:"Target display name"`
+	Type    string      `json:"type" jsonschema:"Target type: NGINX, Apache, HAProxy, F5, IIS"`
+	AgentID string      `json:"agent_id" jsonschema:"Agent ID that manages this target (required)"`
+	Config  interface{} `json:"config,omitempty" jsonschema:"Target-specific configuration"`
+	Enabled bool        `json:"enabled,omitempty" jsonschema:"Whether the target is enabled"`
+}
+
+type UpdateTargetInput struct {
+	ID      string      `json:"id" jsonschema:"Target ID to update"`
+	Name    string      `json:"name,omitempty" jsonschema:"Target display name"`
+	Type    string      `json:"type,omitempty" jsonschema:"Target type"`
+	AgentID string      `json:"agent_id,omitempty" jsonschema:"Agent ID"`
+	Config  interface{} `json:"config,omitempty" jsonschema:"Target-specific configuration"`
+	Enabled *bool       `json:"enabled,omitempty" jsonschema:"Whether the target is enabled"`
+}
+
+// ── Agents ──────────────────────────────────────────────────────────
+
+type RegisterAgentInput struct {
+	ID       string `json:"id,omitempty" jsonschema:"Agent ID"`
+	Name     string `json:"name" jsonschema:"Agent display name"`
+	Hostname string `json:"hostname" jsonschema:"Agent hostname"`
+}
+
+type AgentCSRInput struct {
+	AgentID       string `json:"agent_id" jsonschema:"Agent ID"`
+	CSRPEM        string `json:"csr_pem" jsonschema:"PEM-encoded certificate signing request"`
+	CertificateID string `json:"certificate_id,omitempty" jsonschema:"Certificate ID for the CSR"`
+}
+
+type AgentPickupInput struct {
+	AgentID string `json:"agent_id" jsonschema:"Agent ID"`
+	CertID  string `json:"cert_id" jsonschema:"Certificate ID to pick up"`
+}
+
+type AgentJobStatusInput struct {
+	AgentID string `json:"agent_id" jsonschema:"Agent ID"`
+	JobID   string `json:"job_id" jsonschema:"Job ID"`
+	Status  string `json:"status" jsonschema:"Job status to report"`
+	Error   string `json:"error,omitempty" jsonschema:"Error message if job failed"`
+}
+
+// RetireAgentInput pins the MCP tool surface for certctl_retire_agent. I-004
+// introduces a soft-retirement flow that the handler exposes on DELETE
+// /api/v1/agents/{id} with two optional query flags: force=true cascades
+// through dependent active targets/certs/jobs, and reason is the human-readable
+// string captured in the audit trail. The handler enforces
+// ErrForceReasonRequired when force=true is sent without a reason; we surface
+// both as separate fields so the LLM can populate them independently and so
+// the retire_agent_test shape assertion stays aligned with the JSON-wire
+// contract. ID is always emitted (no omitempty) because a retire call without
+// a target agent is meaningless; Force and Reason are omitempty so the default
+// soft-retire path sends no query suffix at all.
+type RetireAgentInput struct {
+	ID     string `json:"id" jsonschema:"Agent ID to soft-retire"`
+	Force  bool   `json:"force,omitempty" jsonschema:"Cascade-retire downstream active targets, certs, and jobs (requires reason)"`
+	Reason string `json:"reason,omitempty" jsonschema:"Human-readable reason (required when force=true)"`
+}
+
+// ── Jobs ────────────────────────────────────────────────────────────
+
+type ListJobsInput struct {
+	ListParams
+	Status string `json:"status,omitempty" jsonschema:"Filter by status: Pending, AwaitingCSR, AwaitingApproval, Running, Completed, Failed, Cancelled"`
+	Type   string `json:"type,omitempty" jsonschema:"Filter by type: Issuance, Renewal, Deployment, Validation"`
+}
+
+type RejectJobInput struct {
+	ID     string `json:"id" jsonschema:"Job ID to reject"`
+	Reason string `json:"reason,omitempty" jsonschema:"Reason for rejection"`
+}
+
+// ── Notifications ───────────────────────────────────────────────────
+
+// ListNotificationsInput adds the I-005 status filter on top of the standard
+// pagination params. Status="dead" drives the Dead letter tab use case;
+// empty status preserves the pre-I-005 list-all behavior.
+type ListNotificationsInput struct {
+	ListParams
+	Status string `json:"status,omitempty" jsonschema:"Filter by status: pending, sent, failed, dead, read"`
+}
+
+// ── Policies ────────────────────────────────────────────────────────
+
+type CreatePolicyInput struct {
+	ID       string      `json:"id,omitempty" jsonschema:"Policy ID"`
+	Name     string      `json:"name" jsonschema:"Policy display name"`
+	Type     string      `json:"type" jsonschema:"Policy type: AllowedIssuers, AllowedDomains, RequiredMetadata, AllowedEnvironments, RenewalLeadTime"`
+	Config   interface{} `json:"config,omitempty" jsonschema:"Policy-specific configuration"`
+	Enabled  bool        `json:"enabled,omitempty" jsonschema:"Whether the policy is enabled"`
+	Severity string      `json:"severity,omitempty" jsonschema:"Violation severity: Warning, Error, or Critical (default: Warning)"`
+}
+
+type UpdatePolicyInput struct {
+	ID       string      `json:"id" jsonschema:"Policy ID to update"`
+	Name     string      `json:"name,omitempty" jsonschema:"Policy display name"`
+	Type     string      `json:"type,omitempty" jsonschema:"Policy type"`
+	Config   interface{} `json:"config,omitempty" jsonschema:"Policy-specific configuration"`
+	Enabled  *bool       `json:"enabled,omitempty" jsonschema:"Whether the policy is enabled"`
+	Severity string      `json:"severity,omitempty" jsonschema:"Violation severity: Warning, Error, or Critical"`
+}
+
+type ListViolationsInput struct {
+	ID string `json:"id" jsonschema:"Policy ID"`
+	ListParams
+}
+
+// ── Profiles ────────────────────────────────────────────────────────
+
+type CreateProfileInput struct {
+	ID                   string      `json:"id,omitempty" jsonschema:"Profile ID"`
+	Name                 string      `json:"name" jsonschema:"Profile display name"`
+	Description          string      `json:"description,omitempty" jsonschema:"Profile description"`
+	AllowedKeyAlgorithms interface{} `json:"allowed_key_algorithms,omitempty" jsonschema:"Allowed key algorithms and minimum sizes"`
+	MaxTTLSeconds        int         `json:"max_ttl_seconds,omitempty" jsonschema:"Maximum certificate TTL in seconds"`
+	AllowedEKUs          []string    `json:"allowed_ekus,omitempty" jsonschema:"Allowed Extended Key Usages"`
+	RequiredSANPatterns  []string    `json:"required_san_patterns,omitempty" jsonschema:"Required SAN patterns"`
+	AllowShortLived      bool        `json:"allow_short_lived,omitempty" jsonschema:"Allow short-lived certificates (TTL < 1 hour)"`
+	Enabled              bool        `json:"enabled,omitempty" jsonschema:"Whether the profile is enabled"`
+}
+
+type UpdateProfileInput struct {
+	ID                   string      `json:"id" jsonschema:"Profile ID to update"`
+	Name                 string      `json:"name,omitempty" jsonschema:"Profile display name"`
+	Description          string      `json:"description,omitempty" jsonschema:"Profile description"`
+	AllowedKeyAlgorithms interface{} `json:"allowed_key_algorithms,omitempty" jsonschema:"Allowed key algorithms and minimum sizes"`
+	MaxTTLSeconds        *int        `json:"max_ttl_seconds,omitempty" jsonschema:"Maximum certificate TTL in seconds"`
+	AllowedEKUs          []string    `json:"allowed_ekus,omitempty" jsonschema:"Allowed Extended Key Usages"`
+	RequiredSANPatterns  []string    `json:"required_san_patterns,omitempty" jsonschema:"Required SAN patterns"`
+	AllowShortLived      *bool       `json:"allow_short_lived,omitempty" jsonschema:"Allow short-lived certificates"`
+	Enabled              *bool       `json:"enabled,omitempty" jsonschema:"Whether the profile is enabled"`
+}
+
+// ── Teams ───────────────────────────────────────────────────────────
+
+type CreateTeamInput struct {
+	ID          string `json:"id,omitempty" jsonschema:"Team ID"`
+	Name        string `json:"name" jsonschema:"Team name"`
+	Description string `json:"description,omitempty" jsonschema:"Team description"`
+}
+
+type UpdateTeamInput struct {
+	ID          string `json:"id" jsonschema:"Team ID to update"`
+	Name        string `json:"name,omitempty" jsonschema:"Team name"`
+	Description string `json:"description,omitempty" jsonschema:"Team description"`
+}
+
+// ── Owners ──────────────────────────────────────────────────────────
+
+type CreateOwnerInput struct {
+	ID     string `json:"id,omitempty" jsonschema:"Owner ID"`
+	Name   string `json:"name" jsonschema:"Owner display name"`
+	Email  string `json:"email,omitempty" jsonschema:"Owner email for notifications"`
+	TeamID string `json:"team_id,omitempty" jsonschema:"Team ID the owner belongs to"`
+}
+
+type UpdateOwnerInput struct {
+	ID     string `json:"id" jsonschema:"Owner ID to update"`
+	Name   string `json:"name,omitempty" jsonschema:"Owner display name"`
+	Email  string `json:"email,omitempty" jsonschema:"Owner email"`
+	TeamID string `json:"team_id,omitempty" jsonschema:"Team ID"`
+}
+
+// ── Agent Groups ────────────────────────────────────────────────────
+
+type CreateAgentGroupInput struct {
+	ID                string `json:"id,omitempty" jsonschema:"Agent group ID"`
+	Name              string `json:"name" jsonschema:"Group display name"`
+	Description       string `json:"description,omitempty" jsonschema:"Group description"`
+	MatchOS           string `json:"match_os,omitempty" jsonschema:"Match agents by OS (e.g. linux, darwin, windows)"`
+	MatchArchitecture string `json:"match_architecture,omitempty" jsonschema:"Match agents by architecture (e.g. amd64, arm64)"`
+	MatchIPCIDR       string `json:"match_ip_cidr,omitempty" jsonschema:"Match agents by IP CIDR range"`
+	MatchVersion      string `json:"match_version,omitempty" jsonschema:"Match agents by version"`
+	Enabled           bool   `json:"enabled,omitempty" jsonschema:"Whether the group is enabled"`
+}
+
+type UpdateAgentGroupInput struct {
+	ID                string `json:"id" jsonschema:"Agent group ID to update"`
+	Name              string `json:"name,omitempty" jsonschema:"Group display name"`
+	Description       string `json:"description,omitempty" jsonschema:"Group description"`
+	MatchOS           string `json:"match_os,omitempty" jsonschema:"Match agents by OS"`
+	MatchArchitecture string `json:"match_architecture,omitempty" jsonschema:"Match agents by architecture"`
+	MatchIPCIDR       string `json:"match_ip_cidr,omitempty" jsonschema:"Match agents by IP CIDR range"`
+	MatchVersion      string `json:"match_version,omitempty" jsonschema:"Match agents by version"`
+	Enabled           *bool  `json:"enabled,omitempty" jsonschema:"Whether the group is enabled"`
+}
+
+// ── Stats ───────────────────────────────────────────────────────────
+
+type TimelineInput struct {
+	Days int `json:"days,omitempty" jsonschema:"Number of days to look back (default 30, max 365)"`
+}
+
+// ── Discovered Certificates (I-2 closure) ──────────────────────────
+
+// ClaimDiscoveredCertificateInput is the MCP tool input for claiming a
+// discovered certificate (POST /api/v1/discovered-certificates/{id}/claim).
+// I-2 closure (cat-i-b0924b6675f8). The HTTP handler at
+// internal/api/handler/discovery.go::ClaimDiscovered links the discovered
+// row (DC-*) to a managed certificate (mc-*); operators use this to
+// bring an out-of-band cert under management without re-issuing.
+type ClaimDiscoveredCertificateInput struct {
+	ID                   string `json:"id" jsonschema:"Discovered certificate ID (dc-*)"`
+	ManagedCertificateID string `json:"managed_certificate_id" jsonschema:"Existing managed certificate ID (mc-*) to link to"`
+}
+
+// DismissDiscoveredCertificateInput is the MCP tool input for dismissing
+// a discovered certificate (POST /api/v1/discovered-certificates/{id}/dismiss).
+// I-2 closure (cat-i-b0924b6675f8). Marks the row as not-of-interest
+// (e.g. expired self-signed test certs found by a network scan); the row
+// stops appearing in the unmanaged-list view but is preserved in the DB
+// for audit history.
+type DismissDiscoveredCertificateInput struct {
+	ID string `json:"id" jsonschema:"Discovered certificate ID (dc-*)"`
+}
+
+// ── Approvals (P1-28..P1-31, MCP coverage expansion) ───────────────
+
+// ListApprovalsInput is the MCP tool input for listing approval requests
+// (GET /api/v1/approvals). State filter accepts pending|approved|rejected|expired.
+// CertificateID and RequestedBy are optional pre-filters that narrow the
+// returned set; pagination matches the standard envelope.
+type ListApprovalsInput struct {
+	ListParams
+	State         string `json:"state,omitempty" jsonschema:"Filter by state: pending, approved, rejected, expired"`
+	CertificateID string `json:"certificate_id,omitempty" jsonschema:"Filter by certificate ID"`
+	RequestedBy   string `json:"requested_by,omitempty" jsonschema:"Filter by requesting actor (API-key name)"`
+}
+
+// ApprovalDecisionInput is the MCP tool input for approve / reject endpoints.
+// The decided_by actor is derived server-side from the authenticated API-key
+// name (auth.UserKey) — NOT from this body. The two-person-integrity
+// contract (ErrApproveBySameActor) is enforced regardless of who pushes the
+// decision through MCP, so as long as the MCP server's API key identity is
+// distinct from the requesting actor, the contract holds.
+type ApprovalDecisionInput struct {
+	ID   string `json:"id" jsonschema:"Approval request ID"`
+	Note string `json:"note,omitempty" jsonschema:"Optional decision note (e.g. 'approved per ticket SECOPS-12345')"`
+}
+
+// ── Health Checks (P1-20..P1-27, MCP coverage expansion) ───────────
+
+// ListHealthChecksInput pages + filters /api/v1/health-checks.
+// Status accepts healthy|degraded|down|cert_mismatch|unknown.
+type ListHealthChecksInput struct {
+	ListParams
+	Status              string `json:"status,omitempty" jsonschema:"Filter by health status: healthy, degraded, down, cert_mismatch, unknown"`
+	CertificateID       string `json:"certificate_id,omitempty" jsonschema:"Filter by linked certificate ID"`
+	NetworkScanTargetID string `json:"network_scan_target_id,omitempty" jsonschema:"Filter by linked network-scan target ID"`
+	Enabled             string `json:"enabled,omitempty" jsonschema:"Filter by enabled state: 'true' or 'false' (omit for all)"`
+}
+
+// CreateHealthCheckInput maps to the POST /api/v1/health-checks body
+// (domain.EndpointHealthCheck JSON shape). Only `endpoint` is enforced
+// at the handler layer; defaults are applied server-side for thresholds.
+type CreateHealthCheckInput struct {
+	Endpoint            string `json:"endpoint" jsonschema:"TLS endpoint to monitor (host:port)"`
+	CertificateID       string `json:"certificate_id,omitempty" jsonschema:"Optional managed-certificate ID to bind"`
+	NetworkScanTargetID string `json:"network_scan_target_id,omitempty" jsonschema:"Optional network-scan target ID to bind"`
+	ExpectedFingerprint string `json:"expected_fingerprint,omitempty" jsonschema:"Expected SHA-256 fingerprint for cert-pin alerts"`
+	CheckIntervalSecs   int    `json:"check_interval_seconds,omitempty" jsonschema:"Probe interval in seconds (default 300)"`
+	DegradedThreshold   int    `json:"degraded_threshold,omitempty" jsonschema:"Consecutive failures before degraded (default 2)"`
+	DownThreshold       int    `json:"down_threshold,omitempty" jsonschema:"Consecutive failures before down (default 5)"`
+	Enabled             bool   `json:"enabled,omitempty" jsonschema:"Whether the check is active"`
+}
+
+// UpdateHealthCheckInput maps to PUT /api/v1/health-checks/{id}. The handler
+// performs a merge update: non-zero fields overwrite, zero fields preserve.
+type UpdateHealthCheckInput struct {
+	ID                  string `json:"id" jsonschema:"Health-check ID to update"`
+	Endpoint            string `json:"endpoint,omitempty" jsonschema:"TLS endpoint to monitor"`
+	ExpectedFingerprint string `json:"expected_fingerprint,omitempty" jsonschema:"Expected SHA-256 fingerprint"`
+	CheckIntervalSecs   int    `json:"check_interval_seconds,omitempty" jsonschema:"Probe interval in seconds"`
+	DegradedThreshold   int    `json:"degraded_threshold,omitempty" jsonschema:"Consecutive failures before degraded"`
+	DownThreshold       int    `json:"down_threshold,omitempty" jsonschema:"Consecutive failures before down"`
+	Enabled             bool   `json:"enabled,omitempty" jsonschema:"Whether the check is active"`
+}
+
+// HealthCheckHistoryInput maps to GET /api/v1/health-checks/{id}/history.
+// Limit is clamped server-side to 1000.
+type HealthCheckHistoryInput struct {
+	ID    string `json:"id" jsonschema:"Health-check ID"`
+	Limit int    `json:"limit,omitempty" jsonschema:"Max history entries to return (default 100, max 1000)"`
+}
+
+// AcknowledgeHealthCheckInput maps to POST /api/v1/health-checks/{id}/acknowledge.
+// Actor is sent in the body for the audit trail; the handler accepts an empty
+// actor and falls back to "unknown".
+type AcknowledgeHealthCheckInput struct {
+	ID    string `json:"id" jsonschema:"Health-check ID to acknowledge"`
+	Actor string `json:"actor,omitempty" jsonschema:"Actor recording the acknowledgement (defaults to 'unknown')"`
+}
+
+// ── Renewal Policies (P1-1..P1-5, MCP coverage expansion) ──────────
+
+// CreateRenewalPolicyInput maps to POST /api/v1/renewal-policies. Required:
+// name. The remaining fields drive the renewal-window, retry, and alert
+// behavior; reasonable defaults exist server-side.
+type CreateRenewalPolicyInput struct {
+	ID                   string         `json:"id,omitempty" jsonschema:"Policy ID (auto-generated if empty)"`
+	Name                 string         `json:"name" jsonschema:"Policy display name (required)"`
+	RenewalWindowDays    int            `json:"renewal_window_days,omitempty" jsonschema:"Days before expiry to start renewal (e.g. 30)"`
+	AutoRenew            bool           `json:"auto_renew,omitempty" jsonschema:"Whether the scheduler renews automatically"`
+	MaxRetries           int            `json:"max_retries,omitempty" jsonschema:"Maximum renewal retry attempts on failure"`
+	RetryInterval        int            `json:"retry_interval_seconds,omitempty" jsonschema:"Seconds between renewal retry attempts"`
+	AlertThresholdsDays  []int          `json:"alert_thresholds_days,omitempty" jsonschema:"Days-before-expiry at which to fire alerts (e.g. [30,14,7,0])"`
+	CertificateProfileID string         `json:"certificate_profile_id,omitempty" jsonschema:"Optional certificate-profile binding"`
+	AlertChannels        map[string]any `json:"alert_channels,omitempty" jsonschema:"Per-severity channel matrix (informational/warning/critical → channel list)"`
+	AlertSeverityMap     map[string]any `json:"alert_severity_map,omitempty" jsonschema:"Threshold-day → severity tier map (off-map defaults to informational)"`
+}
+
+// UpdateRenewalPolicyInput maps to PUT /api/v1/renewal-policies/{id}.
+// Replace-style update — the handler decodes into a fresh domain.RenewalPolicy
+// and forwards it to the service layer.
+type UpdateRenewalPolicyInput struct {
+	ID                   string         `json:"id" jsonschema:"Policy ID to update"`
+	Name                 string         `json:"name,omitempty" jsonschema:"Policy display name"`
+	RenewalWindowDays    int            `json:"renewal_window_days,omitempty" jsonschema:"Days before expiry to start renewal"`
+	AutoRenew            bool           `json:"auto_renew,omitempty" jsonschema:"Whether the scheduler renews automatically"`
+	MaxRetries           int            `json:"max_retries,omitempty" jsonschema:"Maximum renewal retry attempts on failure"`
+	RetryInterval        int            `json:"retry_interval_seconds,omitempty" jsonschema:"Seconds between renewal retry attempts"`
+	AlertThresholdsDays  []int          `json:"alert_thresholds_days,omitempty" jsonschema:"Days-before-expiry at which to fire alerts"`
+	CertificateProfileID string         `json:"certificate_profile_id,omitempty" jsonschema:"Optional certificate-profile binding"`
+	AlertChannels        map[string]any `json:"alert_channels,omitempty" jsonschema:"Per-severity channel matrix"`
+	AlertSeverityMap     map[string]any `json:"alert_severity_map,omitempty" jsonschema:"Threshold-day → severity tier map"`
+}
+
+// ── Network-Scan Targets (P1-14..P1-19, MCP coverage expansion) ────
+
+// CreateNetworkScanTargetInput maps to POST /api/v1/network-scan-targets.
+// CIDRs / Ports are required for a scan to do anything; the handler
+// itself only enforces JSON parse, so the operator gets a downstream
+// error for empty CIDR / Port slices.
+type CreateNetworkScanTargetInput struct {
+	ID                string   `json:"id,omitempty" jsonschema:"Target ID (auto-generated if empty)"`
+	Name              string   `json:"name" jsonschema:"Target display name"`
+	CIDRs             []string `json:"cidrs,omitempty" jsonschema:"CIDR ranges to scan (e.g. ['10.0.0.0/24'])"`
+	Ports             []int    `json:"ports,omitempty" jsonschema:"TCP ports to probe (e.g. [443, 8443])"`
+	Enabled           bool     `json:"enabled,omitempty" jsonschema:"Whether the target is active"`
+	ScanIntervalHours int      `json:"scan_interval_hours,omitempty" jsonschema:"Scan interval in hours (default 24)"`
+	TimeoutMs         int      `json:"timeout_ms,omitempty" jsonschema:"Per-endpoint TLS handshake timeout in milliseconds"`
+}
+
+// UpdateNetworkScanTargetInput maps to PUT /api/v1/network-scan-targets/{id}.
+type UpdateNetworkScanTargetInput struct {
+	ID                string   `json:"id" jsonschema:"Target ID to update"`
+	Name              string   `json:"name,omitempty" jsonschema:"Target display name"`
+	CIDRs             []string `json:"cidrs,omitempty" jsonschema:"CIDR ranges to scan"`
+	Ports             []int    `json:"ports,omitempty" jsonschema:"TCP ports to probe"`
+	Enabled           bool     `json:"enabled,omitempty" jsonschema:"Whether the target is active"`
+	ScanIntervalHours int      `json:"scan_interval_hours,omitempty" jsonschema:"Scan interval in hours"`
+	TimeoutMs         int      `json:"timeout_ms,omitempty" jsonschema:"Per-endpoint TLS handshake timeout in milliseconds"`
+}
+
+// ── Discovery (P1-10..P1-13, MCP coverage expansion) ───────────────
+
+// ListDiscoveredCertificatesInput maps to GET /api/v1/discovered-certificates.
+// Status filter accepts the enum from domain.DiscoveryStatus
+// (Unmanaged|Managed|Dismissed|...).
+type ListDiscoveredCertificatesInput struct {
+	ListParams
+	AgentID string `json:"agent_id,omitempty" jsonschema:"Filter by reporting agent ID"`
+	Status  string `json:"status,omitempty" jsonschema:"Filter by discovery status (Unmanaged, Managed, Dismissed)"`
+}
+
+// ListDiscoveryScansInput maps to GET /api/v1/discovery-scans.
+type ListDiscoveryScansInput struct {
+	ListParams
+	AgentID string `json:"agent_id,omitempty" jsonschema:"Filter by reporting agent ID"`
+}
+
+// ── Intermediate CAs (P1-6..P1-9, MCP coverage expansion) ──────────
+
+// CreateIntermediateCAInput maps to POST /api/v1/issuers/{id}/intermediates.
+// Admin-gated route. Discriminator on body shape: when ParentCAID is empty
+// AND RootCertPEM + KeyDriverID are set, the call registers an operator-
+// supplied root; otherwise it signs a child under the named parent.
+type CreateIntermediateCAInput struct {
+	IssuerID          string            `json:"issuer_id" jsonschema:"Parent issuer ID (path param)"`
+	Name              string            `json:"name" jsonschema:"Intermediate CA display name"`
+	ParentCAID        string            `json:"parent_ca_id,omitempty" jsonschema:"Parent CA ID (empty for root registration)"`
+	RootCertPEM       string            `json:"root_cert_pem,omitempty" jsonschema:"PEM-encoded root cert (root path only)"`
+	KeyDriverID       string            `json:"key_driver_id,omitempty" jsonschema:"Signer-driver ID (root path only)"`
+	Subject           map[string]any    `json:"subject,omitempty" jsonschema:"X.509 subject (common_name, organization[], country[], ...)"`
+	Algorithm         string            `json:"algorithm,omitempty" jsonschema:"Key algorithm: ECDSA-P256, RSA-3072, ..."`
+	TTLDays           int               `json:"ttl_days,omitempty" jsonschema:"Validity period in days"`
+	PathLenConstraint *int              `json:"path_len_constraint,omitempty" jsonschema:"X.509 BasicConstraints pathLen"`
+	NameConstraints   []map[string]any  `json:"name_constraints,omitempty" jsonschema:"X.509 NameConstraints (RFC 5280 §4.2.1.10)"`
+	OCSPResponderURL  string            `json:"ocsp_responder_url,omitempty" jsonschema:"OCSP responder URL embedded as AIA extension"`
+	Metadata          map[string]string `json:"metadata,omitempty" jsonschema:"Free-form metadata"`
+}
+
+// ListIntermediateCAsInput maps to GET /api/v1/issuers/{id}/intermediates.
+type ListIntermediateCAsInput struct {
+	IssuerID string `json:"issuer_id" jsonschema:"Parent issuer ID"`
+}
+
+// RetireIntermediateCAInput maps to POST /api/v1/intermediates/{id}/retire.
+// Two-phase: first call (Confirm=false) transitions active→retiring; second
+// call (Confirm=true) transitions retiring→retired.
+type RetireIntermediateCAInput struct {
+	ID      string `json:"id" jsonschema:"Intermediate CA ID to retire"`
+	Note    string `json:"note,omitempty" jsonschema:"Audit-trail note"`
+	Confirm bool   `json:"confirm,omitempty" jsonschema:"Set true on the second call to transition to fully retired"`
+}
+
+// ── Misc (P1-32..P1-35, MCP coverage expansion) ────────────────────
+
+// VerifyJobInput maps to POST /api/v1/jobs/{id}/verify. All four body fields
+// after target_id are required at the handler layer (manual emptiness checks).
+type VerifyJobInput struct {
+	ID                  string `json:"id" jsonschema:"Job ID to record verification against"`
+	TargetID            string `json:"target_id" jsonschema:"Deployment target ID (required)"`
+	ExpectedFingerprint string `json:"expected_fingerprint" jsonschema:"Expected SHA-256 fingerprint (required)"`
+	ActualFingerprint   string `json:"actual_fingerprint" jsonschema:"Probed SHA-256 fingerprint (required)"`
+	Verified            bool   `json:"verified" jsonschema:"Whether the verification probe matched"`
+	Error               string `json:"error,omitempty" jsonschema:"Optional probe error message"`
+}
+
+// ── Empty ───────────────────────────────────────────────────────────
+
+type EmptyInput struct{}
+
+// ── Auth (Bundle 1 Phase 11 — RBAC) ────────────────────────────────
+
+// AuthRoleIDInput is the role-id-only input shape used by the get +
+// delete tools. Distinct from the certificate-shaped GetByIDInput so
+// the jsonschema description points at the role prefix specifically.
+type AuthRoleIDInput struct {
+	ID string `json:"id" jsonschema:"Role ID (e.g. r-admin, r-operator)"`
+}
+
+// AuthCreateRoleInput is the body for certctl_auth_create_role.
+type AuthCreateRoleInput struct {
+	Name        string `json:"name" jsonschema:"Role display name (required, must be unique within the tenant)"`
+	Description string `json:"description,omitempty" jsonschema:"Optional human-readable description of what the role grants"`
+}
+
+// AuthUpdateRoleInput is the body for certctl_auth_update_role.
+type AuthUpdateRoleInput struct {
+	ID          string `json:"id" jsonschema:"Role ID to update (e.g. r-release-manager)"`
+	Name        string `json:"name,omitempty" jsonschema:"New role display name. Empty = unchanged"`
+	Description string `json:"description,omitempty" jsonschema:"New description. Empty = unchanged"`
+}
+
+// AuthRolePermissionGrantInput is the body for
+// certctl_auth_add_permission_to_role.
+type AuthRolePermissionGrantInput struct {
+	RoleID     string `json:"role_id" jsonschema:"Role ID to grant the permission to"`
+	Permission string `json:"permission" jsonschema:"Canonical permission name (e.g. cert.read, auth.role.assign). Must be in the catalogue returned by certctl_auth_list_permissions"`
+	ScopeType  string `json:"scope_type,omitempty" jsonschema:"Scope type: global (default) | profile | issuer"`
+	ScopeID    string `json:"scope_id,omitempty" jsonschema:"Scope ID; required when scope_type is profile or issuer"`
+}
+
+// AuthRolePermissionRevokeInput is the input for
+// certctl_auth_remove_permission_from_role.
+type AuthRolePermissionRevokeInput struct {
+	RoleID     string `json:"role_id" jsonschema:"Role ID to revoke the permission from"`
+	Permission string `json:"permission" jsonschema:"Canonical permission name to revoke"`
+	ScopeType  string `json:"scope_type,omitempty" jsonschema:"Optional scope type to disambiguate when the permission is granted at multiple scopes"`
+	ScopeID    string `json:"scope_id,omitempty" jsonschema:"Optional scope ID for scope_type=profile|issuer revocations"`
+}
+
+// AuthAssignKeyRoleInput is the body for
+// certctl_auth_assign_role_to_key.
+type AuthAssignKeyRoleInput struct {
+	KeyID  string `json:"key_id" jsonschema:"API-key actor ID (the named-key Name from CERTCTL_API_KEYS_NAMED, or an ak-<slug> ID minted by the bootstrap path)"`
+	RoleID string `json:"role_id" jsonschema:"Role ID to assign (e.g. r-operator)"`
+}
+
+// AuthRevokeKeyRoleInput is the input for
+// certctl_auth_revoke_role_from_key.
+//
+// Audit 2026-05-11 A-4 — optional scope_type / scope_id fields narrow
+// the revoke to a single (scope_type, scope_id) variant when multiple
+// scoped grants of the same role exist. Empty scope_type fires the
+// legacy "revoke every variant" semantic. The handler enforces:
+// `scope_id` empty when scope_type=global; non-empty when
+// scope_type=profile / issuer.
+type AuthRevokeKeyRoleInput struct {
+	KeyID     string `json:"key_id" jsonschema:"API-key actor ID. Reserved actor-demo-anon is rejected server-side"`
+	RoleID    string `json:"role_id" jsonschema:"Role ID to revoke"`
+	ScopeType string `json:"scope_type,omitempty" jsonschema:"Optional scope filter: global / profile / issuer. Empty = revoke every scope variant of this role (legacy behaviour)"`
+	ScopeID   string `json:"scope_id,omitempty" jsonschema:"Required when scope_type=profile or issuer; must be empty when scope_type=global"`
+}
+
+// =============================================================================
+// Bundle 2 Phase 9 — OIDC + session MCP tool input types.
+//
+// 11 tools that route through the same Phase-5 HTTP handlers the GUI
+// uses; permission gates fire server-side. Each input is the
+// minimal shape the underlying handler expects (the request bodies
+// match the wire format from internal/api/handler/auth_session_oidc.go).
+// =============================================================================
+
+// AuthOIDCProviderIDInput is the input for tools that target a
+// single provider by id (get, delete, refresh).
+type AuthOIDCProviderIDInput struct {
+	ID string `json:"id" jsonschema:"OIDC provider ID (e.g. op-okta, op-keycloak)"`
+}
+
+// AuthCreateOIDCProviderInput is the body for certctl_auth_create_oidc_provider.
+// Mirrors handler.oidcProviderRequest at internal/api/handler/auth_session_oidc.go.
+// client_secret is plaintext on the wire ONLY at create/update; the server
+// encrypts at rest via internal/crypto.EncryptIfKeySet (AES-256-GCM v3 blob).
+type AuthCreateOIDCProviderInput struct {
+	Name                string   `json:"name" jsonschema:"Display name (e.g. \"Okta production\"). Tenant-unique."`
+	IssuerURL           string   `json:"issuer_url" jsonschema:"Discovery doc base (e.g. https://example.okta.com). Server fetches /.well-known/openid-configuration on create + caches per jwks_cache_ttl_seconds."`
+	ClientID            string   `json:"client_id" jsonschema:"OAuth2 client_id registered with the IdP for certctl."`
+	ClientSecret        string   `json:"client_secret" jsonschema:"OAuth2 client_secret. Plaintext on the wire; AES-256-GCM-encrypted at rest. Required on create."`
+	RedirectURI         string   `json:"redirect_uri" jsonschema:"certctl-side redirect URI registered with the IdP (e.g. https://certctl.example.com/auth/oidc/callback)."`
+	GroupsClaimPath     string   `json:"groups_claim_path,omitempty" jsonschema:"Path into the ID token claim set (e.g. groups, realm_access.roles, https://your-namespace/groups). Default: \"groups\"."`
+	GroupsClaimFormat   string   `json:"groups_claim_format,omitempty" jsonschema:"Closed enum: string-array | json-path. Default: string-array."`
+	FetchUserinfo       bool     `json:"fetch_userinfo,omitempty" jsonschema:"When true, falls back to the IdP /userinfo endpoint when the ID token's groups claim is empty."`
+	Scopes              []string `json:"scopes,omitempty" jsonschema:"OAuth2 scopes requested at the authorize step. openid is REQUIRED; profile + email + groups are optional."`
+	AllowedEmailDomains []string `json:"allowed_email_domains,omitempty" jsonschema:"Optional allowlist; empty = any domain accepted."`
+	IATWindowSeconds    int      `json:"iat_window_seconds,omitempty" jsonschema:"Maximum clock-skew tolerance for the ID token's iat claim, in seconds (1..600). Default 300."`
+	JWKSCacheTTLSeconds int      `json:"jwks_cache_ttl_seconds,omitempty" jsonschema:"How long the server caches the IdP's JWKS before refresh, in seconds (>=60). Default 3600."`
+}
+
+// AuthUpdateOIDCProviderInput is the body for certctl_auth_update_oidc_provider.
+// Same shape as Create; client_secret may be omitted to keep the existing
+// ciphertext (matches the GUI's edit-without-rotate UX).
+type AuthUpdateOIDCProviderInput struct {
+	ID                  string   `json:"id" jsonschema:"OIDC provider ID to update (e.g. op-okta)."`
+	Name                string   `json:"name" jsonschema:"Display name."`
+	IssuerURL           string   `json:"issuer_url" jsonschema:"Discovery doc base."`
+	ClientID            string   `json:"client_id" jsonschema:"OAuth2 client_id."`
+	ClientSecret        string   `json:"client_secret,omitempty" jsonschema:"OAuth2 client_secret. Empty preserves the existing ciphertext on the server (no rotate). Provide a new value to rotate."`
+	RedirectURI         string   `json:"redirect_uri" jsonschema:"certctl-side redirect URI."`
+	GroupsClaimPath     string   `json:"groups_claim_path,omitempty" jsonschema:"Path into the ID token claim set."`
+	GroupsClaimFormat   string   `json:"groups_claim_format,omitempty" jsonschema:"string-array | json-path."`
+	FetchUserinfo       bool     `json:"fetch_userinfo,omitempty" jsonschema:"Fall back to /userinfo when ID token groups claim is empty."`
+	Scopes              []string `json:"scopes,omitempty" jsonschema:"OAuth2 scopes requested."`
+	AllowedEmailDomains []string `json:"allowed_email_domains,omitempty" jsonschema:"Email-domain allowlist."`
+	IATWindowSeconds    int      `json:"iat_window_seconds,omitempty" jsonschema:"iat clock-skew tolerance, seconds (1..600)."`
+	JWKSCacheTTLSeconds int      `json:"jwks_cache_ttl_seconds,omitempty" jsonschema:"JWKS cache TTL, seconds (>=60)."`
+}
+
+// AuthListGroupMappingsInput is the input for certctl_auth_list_group_mappings.
+type AuthListGroupMappingsInput struct {
+	ProviderID string `json:"provider_id" jsonschema:"OIDC provider ID to scope the mapping list to. Required (server returns 400 when omitted)."`
+}
+
+// AuthAddGroupMappingInput is the body for certctl_auth_add_group_mapping.
+type AuthAddGroupMappingInput struct {
+	ProviderID string `json:"provider_id" jsonschema:"OIDC provider ID the mapping belongs to."`
+	GroupName  string `json:"group_name" jsonschema:"IdP-supplied group name (e.g. engineers, realm-admins, the literal string an Auth0 namespaced claim emits)."`
+	RoleID     string `json:"role_id" jsonschema:"certctl role ID to grant on group match (e.g. r-operator). Must already exist."`
+}
+
+// AuthRemoveGroupMappingInput is the input for certctl_auth_remove_group_mapping.
+type AuthRemoveGroupMappingInput struct {
+	ID string `json:"id" jsonschema:"Group-mapping ID (e.g. gm-abc123). Returned by certctl_auth_list_group_mappings."`
+}
+
+// AuthListSessionsInput is the input for certctl_auth_list_sessions. When
+// actor_id is empty the call lists the caller's own sessions; when set
+// (with auth.session.list.all) it lists the targeted actor's sessions.
+type AuthListSessionsInput struct {
+	ActorID   string `json:"actor_id,omitempty" jsonschema:"Empty = caller's own sessions (auth.session.list). Non-empty = admin all-actors view (auth.session.list.all required)."`
+	ActorType string `json:"actor_type,omitempty" jsonschema:"Optional actor_type filter. Defaults to User on the server when actor_id is set."`
+}
+
+// AuthRevokeSessionInput is the input for certctl_auth_revoke_session.
+type AuthRevokeSessionInput struct {
+	ID string `json:"id" jsonschema:"Session ID (e.g. ses-abc123). Server-side own-bypass: caller may revoke their own session even without auth.session.revoke."`
+}
+
+// =============================================================================
+// Audit 2026-05-10 MED-13 — input shapes for the 11 new MCP tools
+// (approvals + breakglass + bootstrap + audit category filter).
+// =============================================================================
+
+// ApprovalIDInput is the id-only input for approval get/approve/reject.
+type ApprovalIDInput struct {
+	ID string `json:"id" jsonschema:"Approval request ID (e.g. aprq-abc123). Returned by certctl_approval_list."`
+}
+
+// BreakglassActorIDInput is the actor-id-only input for the unlock + remove tools.
+type BreakglassActorIDInput struct {
+	ActorID string `json:"actor_id" jsonschema:"Break-glass actor ID (e.g. bg-admin1). Listed by certctl_breakglass_list."`
+}
+
+// BreakglassSetPasswordInput is the body for certctl_breakglass_set_password.
+//
+// SECURITY: the password field crosses the MCP transport in
+// plaintext. The server-side handler hashes with Argon2id before
+// persisting; the audit row redacts the password column. Never log
+// this payload at the client side.
+type BreakglassSetPasswordInput struct {
+	ActorID  string `json:"actor_id" jsonschema:"Break-glass actor ID (e.g. bg-admin1). New row created if not present."`
+	Password string `json:"password" jsonschema:"Plaintext password (hashed server-side with Argon2id). Choose >=14 chars from a strong-entropy source; this is the SSO-bypass credential."`
+	RoleID   string `json:"role_id" jsonschema:"Role ID granted on successful break-glass login (e.g. r-admin). Typically r-admin for production break-glass."`
+}
+
+// BootstrapConsumeInput is the body for certctl_bootstrap_consume.
+//
+// SECURITY: NEVER wire this tool into autonomous operation. A leaked
+// bootstrap token mints a fresh admin API key bypassing every other
+// access-control gate. Run manually, once, from a trusted shell.
+type BootstrapConsumeInput struct {
+	Token   string `json:"token" jsonschema:"The pre-shared CERTCTL_BOOTSTRAP_TOKEN value (one-shot, constant-time-compared server-side, never logged)."`
+	KeyName string `json:"key_name" jsonschema:"Human-readable name for the new admin API key (e.g. 'day-zero-admin'). Subsequently visible in certctl_auth_list_keys."`
+}
+
+// AuditListWithCategoryInput is the input for the category-filtered audit list.
+type AuditListWithCategoryInput struct {
+	Category string `json:"category,omitempty" jsonschema:"Audit category filter. One of: auth, pki, config, system, security. Empty returns unfiltered (equivalent to GET /v1/audit)."`
+	Limit    int    `json:"limit,omitempty" jsonschema:"Maximum rows to return. Server default applies when 0."`
+	Since    string `json:"since,omitempty" jsonschema:"RFC3339 timestamp lower bound (inclusive). Optional."`
+	Until    string `json:"until,omitempty" jsonschema:"RFC3339 timestamp upper bound (exclusive). Optional."`
+	ActorID  string `json:"actor_id,omitempty" jsonschema:"Filter by originating actor ID. Optional."`
+}

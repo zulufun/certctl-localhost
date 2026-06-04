@@ -1,0 +1,21 @@
+// Copyright 2026 certctl LLC. All rights reserved.
+// SPDX-License-Identifier: BUSL-1.1
+
+package envoy
+
+import (
+	"context"
+
+	"github.com/zulufun/certctl-localhost/internal/connector/target"
+)
+
+// ValidateOnly is the default Phase 3 stub for the deploy-hardening
+// I master bundle: returns ErrValidateOnlyNotSupported so existing
+// connectors compile against the extended target.Connector interface
+// without changing behavior. Phase envoy dry-run support arrives when
+// the connector's atomic-deploy implementation lands (NGINX in
+// Phase 4, Apache in Phase 5, etc.); each phase replaces this stub
+// with a real validate-with-the-target implementation.
+func (c *Connector) ValidateOnly(ctx context.Context, request target.DeploymentRequest) error {
+	return target.ErrValidateOnlyNotSupported
+}

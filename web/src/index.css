@@ -1,0 +1,169 @@
+/*
+ * Phase 0 hygiene (FE-H4 / PERF-H3): Inter + JetBrains Mono are now
+ * self-hosted via the @fontsource* packages, imported at the top of
+ * web/src/main.tsx so Vite can hash + bundle the font files. The old
+ * Google Fonts @import lived here and produced two cross-origin font
+ * requests on every cold load; those are gone and PERF-H3's
+ * preconnect/dns-prefetch suggestion collapses (no external host left
+ * to preconnect to).
+ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-page text-ink antialiased;
+    /* Phase 0 hygiene (FE-H4): "Inter Variable" is the family name
+       registered by @fontsource-variable/inter (single woff2 covering
+       wght 100-900). Keep "Inter" as a fallback for older browsers /
+       any pinned local install. */
+    font-family: 'Inter Variable', 'Inter', system-ui, -apple-system, sans-serif;
+  }
+}
+
+@layer components {
+  /* Badges */
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold tracking-wide;
+  }
+  .badge-success { @apply bg-emerald-100 text-emerald-700; }
+  .badge-warning { @apply bg-amber-100 text-amber-700; }
+  .badge-danger  { @apply bg-red-100 text-red-700; }
+  .badge-info    { @apply bg-brand-100 text-brand-700; }
+  .badge-neutral { @apply bg-slate-100 text-slate-600; }
+
+  /* Cards */
+  .card {
+    @apply bg-surface border border-surface-border rounded-md shadow-sm;
+  }
+
+  /* Buttons */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded text-sm font-semibold transition-all duration-150;
+  }
+  .btn-primary { @apply bg-brand-500 hover:bg-brand-600 text-white shadow-sm; }
+  .btn-danger  { @apply bg-red-500 hover:bg-red-600 text-white shadow-sm; }
+  .btn-ghost   { @apply text-ink-muted hover:text-ink hover:bg-surface-muted; }
+  .btn-outline { @apply border border-surface-border text-ink-muted hover:text-ink hover:bg-surface-muted; }
+
+  /* Form inputs */
+  .input {
+    @apply bg-white border border-surface-border rounded px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 outline-none transition-colors;
+  }
+
+  /* Monospace data values */
+  .mono {
+    @apply font-mono text-xs;
+  }
+
+  /* Stat cards with colored top borders */
+  .stat-card {
+    @apply bg-surface border border-surface-border rounded-md shadow-sm p-5 border-t-4;
+  }
+}
+
+/*
+ * Phase 0 hygiene (UX-L2): honour prefers-reduced-motion. Users who
+ * opt out of animation at the OS level get effectively-instant
+ * transitions on every animated element (badges, modals, toggles).
+ * 0.01ms is the conventional non-zero value — fully zero can break
+ * libraries that observe transitionend events.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/*
+ * Phase 0 hygiene (UX-L3): a baseline print stylesheet. Hides the
+ * sidebar + top action bars, removes card shadows, expands content
+ * to full width, and keeps table rows intact across page breaks.
+ * Operator-facing — operators print certificate detail pages and
+ * audit-log exports for compliance archives.
+ */
+@media print {
+  /* Drop sidebar / nav chrome — only the content matters in print. */
+  aside,
+  nav,
+  [role="navigation"],
+  .no-print {
+    display: none !important;
+  }
+
+  /* Full-width content, no shadows, plain backgrounds (ink saving). */
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+  main,
+  .card,
+  .stat-card {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    border-color: #cbd5e1 !important;
+    page-break-inside: avoid;
+  }
+
+  /* Tables: prevent mid-row breaks, repeat headers on each page. */
+  table {
+    width: 100% !important;
+  }
+  thead {
+    display: table-header-group;
+  }
+  tr,
+  td,
+  th {
+    page-break-inside: avoid;
+  }
+
+  /* Show link hrefs alongside the visible text — print readers
+     can't click links, so the target URL is the only signal. */
+  a[href]::after {
+    content: " (" attr(href) ")";
+    font-size: 0.85em;
+    color: #555555;
+  }
+  a[href^="#"]::after,
+  a[href^="javascript:"]::after {
+    content: "";
+  }
+}
+
+/*
+ * Phase 9 closure (FE-M2 — operator decision 2026-05-14): desktop-only.
+ * The audit flagged 29 partial sm:/md:/lg: responsive classes scattered
+ * across a handful of files, suggesting mobile support that isn't
+ * actually shipped. Operator chose path (a): document desktop-only +
+ * add a viewport-narrow banner; the partial responsive classes stay
+ * (no benefit to ripping them out — they don't hurt at desktop widths
+ * and may help if the decision ever reverses).
+ *
+ * Banner triggers at < 1024px (Tailwind `lg` breakpoint — the layout
+ * starts visibly cramping below this). It's a single fixed bar at the
+ * top of the viewport, doesn't block interaction (z-index high, but
+ * pointer-events: none on the rest of the body), and dismisses with a
+ * one-click "Dismiss" affordance that persists to localStorage.
+ *
+ * Operators who explicitly want narrow-viewport access (responsive
+ * design work, mobile demo, screen-recording at portrait orientation)
+ * can dismiss and the banner stays gone for that browser.
+ */
+@media (max-width: 1023px) {
+  .desktop-only-banner {
+    display: flex;
+  }
+}
+.desktop-only-banner {
+  display: none;
+}

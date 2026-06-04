@@ -1,0 +1,341 @@
+// Copyright 2026 certctl LLC. All rights reserved.
+// SPDX-License-Identifier: BUSL-1.1
+
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/zulufun/certctl-localhost/internal/domain"
+	"github.com/zulufun/certctl-localhost/internal/repository"
+)
+
+// AuditService provides business logic for recording and retrieving audit events.
+type AuditService struct {
+	auditRepo repository.AuditRepository
+}
+
+// NewAuditService creates a new audit service.
+func NewAuditService(auditRepo repository.AuditRepository) *AuditService {
+	return &AuditService{
+		auditRepo: auditRepo,
+	}
+}
+
+// RecordEvent records an audit event with actor, action, and resource information.
+//
+// Bundle-6 / Audit H-008 + M-022 / CWE-532: every details map flows through
+// RedactDetailsForAudit BEFORE marshaling. The redactor scrubs credential
+// keys (api_key, password, token, *_pem, eab_secret, ...) and PII keys
+// (email, phone, ssn, name, address, ip_address, ...) and surfaces a
+// `redacted_keys` array so operators can audit the redactor itself during
+// a compliance review. See internal/service/audit_redact.go.
+func (s *AuditService) RecordEvent(ctx context.Context, actor string, actorType domain.ActorType, action string, resourceType string, resourceID string, details map[string]interface{}) error {
+	return s.RecordEventWithCategory(ctx, actor, actorType, action, "", resourceType, resourceID, details)
+}
+
+// RecordEventWithCategory is the Bundle 1 Phase 8 categorized variant
+// of RecordEvent. eventCategory is one of
+// domain.EventCategoryCertLifecycle, domain.EventCategoryAuth,
+// domain.EventCategoryConfig — empty defaults to cert_lifecycle in
+// the persistence layer + DB CHECK constraint.
+//
+// Existing 90+ call sites that don't yet pass a category route
+// through the legacy RecordEvent and inherit the cert_lifecycle
+// default; new callers (auth handlers, bootstrap, config-mutation
+// handlers) call this method directly with their explicit category.
+// Both paths share the same redaction + marshaling contract.
+func (s *AuditService) RecordEventWithCategory(ctx context.Context, actor string, actorType domain.ActorType, action, eventCategory, resourceType, resourceID string, details map[string]interface{}) error {
+	redacted := RedactDetailsForAudit(details)
+	detailsJSON, err := json.Marshal(redacted)
+	if err != nil {
+		detailsJSON = []byte("{}")
+	}
+
+	event := &domain.AuditEvent{
+		ID:            generateID("audit"),
+		Timestamp:     time.Now(),
+		Actor:         actor,
+		ActorType:     actorType,
+		Action:        action,
+		ResourceType:  resourceType,
+		ResourceID:    resourceID,
+		Details:       json.RawMessage(detailsJSON),
+		EventCategory: eventCategory,
+	}
+
+	if err := s.auditRepo.Create(ctx, event); err != nil {
+		return fmt.Errorf("failed to record audit event: %w", err)
+	}
+
+	return nil
+}
+
+// RecordEventWithTx records an audit event using the supplied repository.Querier.
+//
+// Pass *sql.Tx (typically obtained from postgres.WithinTx) to participate in
+// a caller's transaction so the audit row is atomic with the operation that
+// triggered it. Closes the #3 acquisition-readiness blocker from the
+// 2026-05-01 issuer coverage audit (audit row not transactional with the
+// operation it audits).
+//
+// Same redaction + marshalling contract as RecordEvent; only the database
+// handle changes.
+func (s *AuditService) RecordEventWithTx(ctx context.Context, q repository.Querier, actor string, actorType domain.ActorType, action string, resourceType string, resourceID string, details map[string]interface{}) error {
+	redacted := RedactDetailsForAudit(details)
+	detailsJSON, err := json.Marshal(redacted)
+	if err != nil {
+		detailsJSON = []byte("{}")
+	}
+
+	event := &domain.AuditEvent{
+		ID:           generateID("audit"),
+		Timestamp:    time.Now(),
+		Actor:        actor,
+		ActorType:    actorType,
+		Action:       action,
+		ResourceType: resourceType,
+		ResourceID:   resourceID,
+		Details:      json.RawMessage(detailsJSON),
+	}
+
+	if err := s.auditRepo.CreateWithTx(ctx, q, event); err != nil {
+		return fmt.Errorf("failed to record audit event: %w", err)
+	}
+
+	return nil
+}
+
+// RecordEventWithCategoryWithTx records a categorized audit event using
+// the supplied repository.Querier so the row is committed in the same
+// transaction as the underlying action. Mirrors RecordEventWithCategory
+// but takes the Querier (typically *sql.Tx from postgres.WithinTx).
+//
+// Audit 2026-05-10 HIGH-6 closure — closes the gap where Bundle-1+2
+// auth-mutation paths emitted the audit row via a separate, non-
+// transactional connection. A DB hiccup or connection reset between
+// the action and the audit-row INSERT used to leave the action
+// committed with no audit trail (CWE-778). With this method, the
+// audit row participates in the action's transaction: rollback on
+// any failure removes both the action row AND any audit row that the
+// caller wrote inside the tx.
+func (s *AuditService) RecordEventWithCategoryWithTx(ctx context.Context, q repository.Querier, actor string, actorType domain.ActorType, action, eventCategory, resourceType, resourceID string, details map[string]interface{}) error {
+	redacted := RedactDetailsForAudit(details)
+	detailsJSON, err := json.Marshal(redacted)
+	if err != nil {
+		detailsJSON = []byte("{}")
+	}
+
+	event := &domain.AuditEvent{
+		ID:            generateID("audit"),
+		Timestamp:     time.Now(),
+		Actor:         actor,
+		ActorType:     actorType,
+		Action:        action,
+		ResourceType:  resourceType,
+		ResourceID:    resourceID,
+		Details:       json.RawMessage(detailsJSON),
+		EventCategory: eventCategory,
+	}
+
+	if err := s.auditRepo.CreateWithTx(ctx, q, event); err != nil {
+		return fmt.Errorf("failed to record audit event: %w", err)
+	}
+
+	return nil
+}
+
+// List returns audit events matching filter criteria.
+func (s *AuditService) List(ctx context.Context, filter *repository.AuditFilter) ([]*domain.AuditEvent, error) {
+	events, err := s.auditRepo.List(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list audit events: %w", err)
+	}
+	return events, nil
+}
+
+// ListByResource returns all audit events for a specific resource.
+func (s *AuditService) ListByResource(ctx context.Context, resourceType string, resourceID string) ([]*domain.AuditEvent, error) {
+	filter := &repository.AuditFilter{
+		ResourceType: resourceType,
+		ResourceID:   resourceID,
+		PerPage:      1000, // reasonable default for single resource
+	}
+
+	events, err := s.auditRepo.List(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list audit events: %w", err)
+	}
+	return events, nil
+}
+
+// ListByActor returns all audit events for a specific actor.
+func (s *AuditService) ListByActor(ctx context.Context, actor string) ([]*domain.AuditEvent, error) {
+	filter := &repository.AuditFilter{
+		Actor:   actor,
+		PerPage: 1000,
+	}
+
+	events, err := s.auditRepo.List(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list audit events: %w", err)
+	}
+	return events, nil
+}
+
+// ListByAction returns all audit events for a specific action type.
+func (s *AuditService) ListByAction(ctx context.Context, action string, from, to time.Time) ([]*domain.AuditEvent, error) {
+	filter := &repository.AuditFilter{
+		From:    from,
+		To:      to,
+		PerPage: 1000,
+	}
+
+	events, err := s.auditRepo.List(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list audit events: %w", err)
+	}
+
+	// Filter by action on client side (repository may not filter by action directly)
+	var filtered []*domain.AuditEvent
+	for _, e := range events {
+		if e.Action == action {
+			filtered = append(filtered, e)
+		}
+	}
+
+	return filtered, nil
+}
+
+// ListAuditEvents returns paginated audit events (handler interface method).
+func (s *AuditService) ListAuditEvents(ctx context.Context, page, perPage int) ([]domain.AuditEvent, int64, error) {
+	return s.ListAuditEventsByFilter(ctx, time.Time{}, time.Time{}, "", page, perPage)
+}
+
+// ListAuditEventsByCategory is the Bundle 1 Phase 8 categorized variant.
+// Empty eventCategory disables the filter. Kept as a thin wrapper around
+// ListAuditEventsByFilter so existing callers don't need to thread zero
+// time values.
+func (s *AuditService) ListAuditEventsByCategory(ctx context.Context, eventCategory string, page, perPage int) ([]domain.AuditEvent, int64, error) {
+	return s.ListAuditEventsByFilter(ctx, time.Time{}, time.Time{}, eventCategory, page, perPage)
+}
+
+// ListAuditEventsByFilter is the P-H2 closure (frontend-design-audit
+// 2026-05-14) — handler-facing list that supports server-side
+// time-range filtering on top of the existing category filter. The
+// repository (internal/repository/postgres/audit.go) has always
+// pushed `timestamp >= since` and `timestamp <= until` predicates
+// into the SQL query when AuditFilter.From / .To are set; this method
+// just threads the operator-supplied bounds from the handler into
+// the filter struct. The (event_category, timestamp DESC) composite
+// index added in migration 000032 makes the predicate push-down hit
+// an index scan rather than a sequential scan on the audit_events
+// table.
+//
+// Zero time.Time values for since OR until disable the bound (i.e.
+// "open-ended on that side"). Both zero ≡ no time filter ≡ the
+// pre-P-H2 list behavior, which is what the two delegating wrappers
+// above rely on for backward compatibility.
+func (s *AuditService) ListAuditEventsByFilter(ctx context.Context, since, until time.Time, eventCategory string, page, perPage int) ([]domain.AuditEvent, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if perPage < 1 {
+		perPage = 50
+	}
+
+	filter := &repository.AuditFilter{
+		EventCategory: eventCategory,
+		From:          since,
+		To:            until,
+		Page:          page,
+		PerPage:       perPage,
+	}
+
+	events, err := s.auditRepo.List(ctx, filter)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to list audit events: %w", err)
+	}
+
+	// Convert pointers to values for the handler interface
+	var result []domain.AuditEvent
+	for _, e := range events {
+		if e != nil {
+			result = append(result, *e)
+		}
+	}
+
+	// see #audit-pagination-count — the repository currently returns
+	// the full filtered slice and we surface len(result) as total. This
+	// works for the audit page's current shape (server-side filter +
+	// client-side pagination over a bounded window) but is wrong when
+	// the frontend ports to server-side cursoring. At that point the
+	// repository must add a CountAuditEvents(filter) method and this
+	// line becomes total, _ := s.repo.CountAuditEvents(ctx, filter).
+	// P-H2 (this method) didn't introduce server-side cursoring — it
+	// only added the time-range predicate — so the same limitation
+	// applies. Tracked separately.
+	total := int64(len(result))
+
+	return result, total, nil
+}
+
+// ExportEventsByFilter returns audit events matching a date-range +
+// optional category filter without pagination — the export handler
+// uses this to stream NDJSON for compliance evidence collection.
+//
+// Audit 2026-05-10 HIGH-11 closure: pre-fix, the `audit.export`
+// permission was seeded into r-admin and r-auditor (migration 000031)
+// but no endpoint enforced it — misleading capability advertisement.
+// This method is the service-layer building block for the new
+// GET /api/v1/audit/export endpoint.
+//
+// Bounded callers: the handler enforces a max 90-day range + max-rows
+// cap before invoking this; the service-layer method itself is
+// permissive so future callers (compliance-job runner, MCP tool) can
+// reuse the helper without duplicating the bound enforcement.
+func (s *AuditService) ExportEventsByFilter(ctx context.Context, from, to time.Time, eventCategory string, maxRows int) ([]domain.AuditEvent, error) {
+	if maxRows <= 0 {
+		maxRows = 50000
+	}
+	filter := &repository.AuditFilter{
+		EventCategory: eventCategory,
+		From:          from,
+		To:            to,
+		Page:          1,
+		PerPage:       maxRows,
+	}
+	events, err := s.auditRepo.List(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list audit events for export: %w", err)
+	}
+	out := make([]domain.AuditEvent, 0, len(events))
+	for _, e := range events {
+		if e != nil {
+			out = append(out, *e)
+		}
+	}
+	return out, nil
+}
+
+// GetAuditEvent returns a single audit event (handler interface method).
+func (s *AuditService) GetAuditEvent(ctx context.Context, id string) (*domain.AuditEvent, error) {
+	filter := &repository.AuditFilter{
+		ResourceID: id,
+		PerPage:    1,
+	}
+
+	events, err := s.auditRepo.List(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get audit event: %w", err)
+	}
+
+	if len(events) == 0 {
+		return nil, fmt.Errorf("audit event not found")
+	}
+
+	return events[0], nil
+}

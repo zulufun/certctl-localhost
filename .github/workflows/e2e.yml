@@ -1,0 +1,112 @@
+# Phase 8 closure (TEST-H1 + TEST-H2): browser-driven E2E + visual
+# regression.
+#
+# TEST-003 closure (Sprint 5, 2026-05-16): the suite has accumulated
+# the empirical green-run evidence the Phase 8 prompt required. 14
+# consecutive green runs across 2026-05-14 to 2026-05-15 (sampled
+# via api.github.com/repos/certctl-io/certctl/actions/runs) during
+# heavy Sprint 1-4 frontend churn confirm stability. The job is
+# now part of the merge gate (continue-on-error: false below).
+#
+# Operator action still required AFTER this commit pushes:
+#   - Add this job's "id" to the branch-protection required-checks
+#     list at https://github.com/zulufun/certctl-localhost/settings/branches.
+#     Without that, the workflow's failure-blocks-merge contract
+#     only fires on PRs whose author is configured to honour the
+#     status check; configured required-checks make it universal.
+#
+# Visual regression: the 04-visual-regression.spec.ts file uses
+# Playwright `toHaveScreenshot()`. First-run on a new branch
+# regenerates baselines via the `--update-snapshots` flag; the
+# operator commits the resulting PNG bytes to git. Subsequent runs
+# pixel-diff. The dispatch input below provides an explicit knob
+# for that initial baseline pass without needing to edit the
+# workflow file. See docs/operator/runbooks/e2e-snapshot-update.md
+# for the snapshot-bump workflow.
+
+name: Frontend E2E
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'web/**'
+      - '.github/workflows/e2e.yml'
+  pull_request:
+    paths:
+      - 'web/**'
+      - '.github/workflows/e2e.yml'
+  workflow_dispatch:
+    inputs:
+      update_snapshots:
+        description: 'Regenerate visual-regression baselines (use sparingly)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: Playwright E2E + visual regression
+    runs-on: ubuntu-latest
+    # TEST-003 closure (Sprint 5, 2026-05-16): flipped from
+    # continue-on-error: true after 14 consecutive green runs across
+    # 2026-05-14 to 2026-05-15 confirmed stability. Failures here
+    # now fail the workflow, which (combined with the branch
+    # protection update the operator owns post-merge) blocks merge.
+    continue-on-error: false
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: '22'
+
+      - name: Install Dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: web
+        # --with-deps installs OS packages (libnss3, libatk1.0-0, etc.)
+        # the chromium browser needs. Skipping this is the #1 source
+        # of "tests pass locally but fail on CI" for new Playwright
+        # users. The browser binary downloads to ~/.cache/ms-playwright;
+        # the actions/setup-node cache key does NOT include it, so each
+        # CI run re-downloads. Add an actions/cache step targeting
+        # ~/.cache/ms-playwright keyed by the @playwright/test version
+        # in package-lock.json once the suite is stable.
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright E2E + visual regression
+        working-directory: web
+        # The webServer block in playwright.config.ts boots `npm run dev`
+        # automatically and waits for http://localhost:5173 to be
+        # responsive before the first test fires. No separate "start
+        # server" step needed.
+        run: |
+          if [[ "${{ github.event.inputs.update_snapshots }}" == "true" ]]; then
+            echo "::warning::Regenerating visual-regression baselines"
+            npx playwright test --update-snapshots
+          else
+            npx playwright test
+          fi
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882  # v4
+        with:
+          name: playwright-report
+          path: web/playwright-report/
+          retention-days: 7
+
+      - name: Upload visual-regression diffs on failure
+        if: failure()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882  # v4
+        with:
+          name: visual-regression-diffs
+          path: web/test-results/
+          retention-days: 7

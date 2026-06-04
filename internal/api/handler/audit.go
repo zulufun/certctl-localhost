@@ -1,0 +1,341 @@
+// Copyright 2026 certctl LLC. All rights reserved.
+// SPDX-License-Identifier: BUSL-1.1
+
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/zulufun/certctl-localhost/internal/api/middleware"
+	"github.com/zulufun/certctl-localhost/internal/auth"
+	"github.com/zulufun/certctl-localhost/internal/domain"
+)
+
+// AuditService defines the service interface for audit event operations.
+type AuditService interface {
+	ListAuditEvents(ctx context.Context, page, perPage int) ([]domain.AuditEvent, int64, error)
+	GetAuditEvent(ctx context.Context, id string) (*domain.AuditEvent, error)
+	// ListAuditEventsByCategory (Bundle 1 Phase 8) returns audit
+	// rows whose event_category column matches eventCategory.
+	// eventCategory is one of "cert_lifecycle", "auth", "config";
+	// empty string returns all categories. Used by the auditor role
+	// (filtered to "auth" via /v1/audit?category=auth).
+	ListAuditEventsByCategory(ctx context.Context, eventCategory string, page, perPage int) ([]domain.AuditEvent, int64, error)
+	// ListAuditEventsByFilter (P-H2 closure, frontend-design-audit
+	// 2026-05-14) returns audit rows constrained by an optional time
+	// range AND optional category. Zero time.Time on either bound
+	// disables that bound. The repository already pushes the
+	// predicate into SQL (timestamp >=/<= since/until); this method
+	// just threads handler-parsed `since` / `until` query params
+	// through to the filter. Frontend (AuditPage) drops the pre-P-H2
+	// client-side time filter ("fetches the entire event window,
+	// throws 99% away in JS") and sends since/until directly. MCP's
+	// certctl_audit_list_with_category tool already advertised these
+	// params; this closure makes that advertised contract truthful.
+	ListAuditEventsByFilter(ctx context.Context, since, until time.Time, eventCategory string, page, perPage int) ([]domain.AuditEvent, int64, error)
+	// ExportEventsByFilter returns audit events matching a
+	// (from, to, eventCategory) filter, capped at maxRows. Audit
+	// 2026-05-10 HIGH-11 closure — backs the new
+	// GET /api/v1/audit/export endpoint that makes the `audit.export`
+	// permission load-bearing.
+	ExportEventsByFilter(ctx context.Context, from, to time.Time, eventCategory string, maxRows int) ([]domain.AuditEvent, error)
+	// RecordEventWithCategory is needed by the export handler so it
+	// can recursively self-audit each export call (operator-visible
+	// proof that compliance evidence pulls happened + by whom + over
+	// what range). The bare-string actor type is the existing wire
+	// shape used by every other Phase 8 caller.
+	RecordEventWithCategory(ctx context.Context, actor string, actorType domain.ActorType, action, eventCategory, resourceType, resourceID string, details map[string]interface{}) error
+}
+
+// AuditHandler handles HTTP requests for audit event operations.
+type AuditHandler struct {
+	svc AuditService
+}
+
+// NewAuditHandler creates a new AuditHandler with a service dependency.
+func NewAuditHandler(svc AuditService) AuditHandler {
+	return AuditHandler{svc: svc}
+}
+
+// ListAuditEvents lists audit events.
+// GET /api/v1/audit?page=1&per_page=50&category=auth&since=<RFC3339>&until=<RFC3339>
+//
+// Bundle 1 Phase 8 added the optional `category` query parameter for
+// auditor-role filtering. Allowed values: cert_lifecycle, auth, config.
+// Unknown values surface 400 so misuse is caught loud (instead of
+// silently returning all rows).
+//
+// P-H2 closure (frontend-design-audit 2026-05-14) adds the optional
+// `since` / `until` time-range query parameters. Both accept RFC3339
+// (e.g. "2026-04-01T00:00:00Z"). Either bound can be omitted to leave
+// that side open-ended. The repository already pushes the timestamp
+// predicate into the SQL query, and migration 000032's
+// (event_category, timestamp DESC) composite index makes the
+// predicate hit an index scan rather than a sequential scan.
+//
+// Note on naming: this endpoint uses `since` / `until` to match the
+// existing MCP `certctl_audit_list_with_category` tool's published
+// contract (internal/mcp/tools_audit_fix.go:174) and the audit-text
+// framing of the P-H2 finding. The sibling /api/v1/audit/export
+// endpoint uses `from` / `to` for compliance-window semantics
+// (required, ≤ 90-day range, NDJSON streaming); the two endpoints
+// share data but have different param semantics and the names were
+// chosen to reflect that.
+func (h AuditHandler) ListAuditEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		Error(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	requestID := middleware.GetRequestID(r.Context())
+
+	page := 1
+	perPage := 50
+	query := r.URL.Query()
+	if p := query.Get("page"); p != "" {
+		if parsed, err := strconv.Atoi(p); err == nil && parsed > 0 {
+			page = parsed
+		}
+	}
+	if pp := query.Get("per_page"); pp != "" {
+		if parsed, err := strconv.Atoi(pp); err == nil && parsed > 0 && parsed <= 500 {
+			perPage = parsed
+		}
+	}
+	category := query.Get("category")
+	if category != "" {
+		switch category {
+		case domain.EventCategoryCertLifecycle, domain.EventCategoryAuth, domain.EventCategoryConfig:
+			// ok
+		default:
+			ErrorWithRequestID(w, http.StatusBadRequest,
+				"Invalid category — allowed: cert_lifecycle, auth, config",
+				requestID)
+			return
+		}
+	}
+
+	// P-H2: optional time-range bounds. RFC3339 parse with explicit
+	// 400 on malformed input — silently dropping a malformed `since`
+	// would be worse than rejecting it (operator gets unfiltered
+	// results when they thought they were filtering).
+	var since, until time.Time
+	if s := query.Get("since"); s != "" {
+		parsed, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			ErrorWithRequestID(w, http.StatusBadRequest,
+				"`since` must be RFC3339 (e.g. 2026-04-01T00:00:00Z)",
+				requestID)
+			return
+		}
+		since = parsed
+	}
+	if u := query.Get("until"); u != "" {
+		parsed, err := time.Parse(time.RFC3339, u)
+		if err != nil {
+			ErrorWithRequestID(w, http.StatusBadRequest,
+				"`until` must be RFC3339 (e.g. 2026-05-01T00:00:00Z)",
+				requestID)
+			return
+		}
+		until = parsed
+	}
+	if !since.IsZero() && !until.IsZero() && !until.After(since) {
+		ErrorWithRequestID(w, http.StatusBadRequest,
+			"`until` must be after `since`",
+			requestID)
+		return
+	}
+
+	events, total, err := h.svc.ListAuditEventsByFilter(r.Context(), since, until, category, page, perPage)
+	if err != nil {
+		ErrorWithRequestID(w, http.StatusInternalServerError, "Failed to list audit events", requestID)
+		return
+	}
+
+	response := PagedResponse{
+		Data:    events,
+		Total:   total,
+		Page:    page,
+		PerPage: perPage,
+	}
+
+	JSON(w, http.StatusOK, response)
+}
+
+// GetAuditEvent retrieves a single audit event by ID.
+// GET /api/v1/audit/{id}
+func (h AuditHandler) GetAuditEvent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		Error(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	requestID := middleware.GetRequestID(r.Context())
+
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/audit/")
+	parts := strings.Split(id, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		ErrorWithRequestID(w, http.StatusBadRequest, "Audit event ID is required", requestID)
+		return
+	}
+	id = parts[0]
+
+	event, err := h.svc.GetAuditEvent(r.Context(), id)
+	if err != nil {
+		ErrorWithRequestID(w, http.StatusNotFound, "Audit event not found", requestID)
+		return
+	}
+
+	JSON(w, http.StatusOK, event)
+}
+
+// ExportAudit streams an NDJSON export of audit events for compliance
+// evidence collection. Gated by the `audit.export` permission (already
+// seeded into r-admin + r-auditor by migration 000031).
+//
+// Audit 2026-05-10 HIGH-11 closure — pre-fix, the permission existed
+// in the catalogue + role grants but no endpoint enforced it; r-auditor's
+// "audit.export" claim was misleading capability advertisement. This
+// endpoint makes the permission load-bearing and the auditor role's
+// surface complete.
+//
+// GET /api/v1/audit/export?from=<RFC3339>&to=<RFC3339>&category=<cat>
+//
+// Constraints:
+//   - from + to are required, RFC3339 format.
+//   - to - from MUST be ≤ 90 days (compliance window).
+//   - category optional: cert_lifecycle | auth | config.
+//   - max 50,000 rows per export (operator-tunable via query param
+//     up to 100,000); larger exports require operator-side pagination
+//     by date range.
+//
+// Response: application/x-ndjson, one event per line. Newline-delimited
+// JSON is the de-facto compliance-archive format consumed by SIEMs
+// (Splunk universal forwarder, Elastic Filebeat, Vector, etc.).
+//
+// The export itself is recursively audited: every successful export
+// emits an `audit.export` event capturing actor, range, category, and
+// row count so the audit log itself records who pulled which compliance
+// evidence and when.
+func (h AuditHandler) ExportAudit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		Error(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	requestID := middleware.GetRequestID(r.Context())
+
+	q := r.URL.Query()
+	fromStr := q.Get("from")
+	toStr := q.Get("to")
+	if fromStr == "" || toStr == "" {
+		ErrorWithRequestID(w, http.StatusBadRequest,
+			"`from` and `to` query params are required (RFC3339 format)",
+			requestID)
+		return
+	}
+	from, err := time.Parse(time.RFC3339, fromStr)
+	if err != nil {
+		ErrorWithRequestID(w, http.StatusBadRequest,
+			"`from` must be RFC3339 (e.g. 2026-04-01T00:00:00Z)",
+			requestID)
+		return
+	}
+	to, err := time.Parse(time.RFC3339, toStr)
+	if err != nil {
+		ErrorWithRequestID(w, http.StatusBadRequest,
+			"`to` must be RFC3339 (e.g. 2026-05-01T00:00:00Z)",
+			requestID)
+		return
+	}
+	if !to.After(from) {
+		ErrorWithRequestID(w, http.StatusBadRequest,
+			"`to` must be after `from`",
+			requestID)
+		return
+	}
+	const maxWindow = 90 * 24 * time.Hour
+	if to.Sub(from) > maxWindow {
+		ErrorWithRequestID(w, http.StatusBadRequest,
+			fmt.Sprintf("range exceeds 90-day max (got %s); paginate by narrower date range", to.Sub(from)),
+			requestID)
+		return
+	}
+
+	category := q.Get("category")
+	if category != "" {
+		switch category {
+		case domain.EventCategoryCertLifecycle, domain.EventCategoryAuth, domain.EventCategoryConfig:
+			// ok
+		default:
+			ErrorWithRequestID(w, http.StatusBadRequest,
+				"Invalid category — allowed: cert_lifecycle, auth, config",
+				requestID)
+			return
+		}
+	}
+
+	maxRows := 50000
+	if lim := q.Get("limit"); lim != "" {
+		if parsed, err := strconv.Atoi(lim); err == nil && parsed > 0 && parsed <= 100000 {
+			maxRows = parsed
+		}
+	}
+
+	events, err := h.svc.ExportEventsByFilter(r.Context(), from, to, category, maxRows)
+	if err != nil {
+		ErrorWithRequestID(w, http.StatusInternalServerError,
+			"Failed to export audit events",
+			requestID)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Content-Disposition",
+		fmt.Sprintf(`attachment; filename="certctl-audit-%s_to_%s.ndjson"`,
+			from.UTC().Format("2006-01-02"), to.UTC().Format("2006-01-02")))
+	w.WriteHeader(http.StatusOK)
+
+	enc := json.NewEncoder(w)
+	for i := range events {
+		if err := enc.Encode(&events[i]); err != nil {
+			// Mid-stream encode error — connection probably closed by
+			// client. Logged + abandoned; the partial response is
+			// already on the wire and rolling back the headers isn't
+			// possible.
+			slog.WarnContext(r.Context(), "audit export: encode failed mid-stream",
+				"err", err, "rows_written", i, "rows_total", len(events))
+			return
+		}
+	}
+
+	// Recursively self-audit the export. The audit row captures actor,
+	// from, to, category, and row count so compliance reviewers can see
+	// who pulled which evidence and when. Best-effort (the data is
+	// already on the wire); failure logs WARN per the HIGH-6 closure.
+	actorID, _ := r.Context().Value(auth.ActorIDKey{}).(string)
+	if actorID == "" {
+		actorID = "unknown"
+	}
+	if err := h.svc.RecordEventWithCategory(r.Context(),
+		actorID, domain.ActorTypeUser,
+		"audit.export", domain.EventCategoryAuth,
+		"audit", "export",
+		map[string]interface{}{
+			"from":     from.UTC().Format(time.RFC3339),
+			"to":       to.UTC().Format(time.RFC3339),
+			"category": category,
+			"rows":     len(events),
+		}); err != nil {
+		slog.WarnContext(r.Context(), "audit.export self-audit failed (export already streamed)",
+			"actor_id", actorID, "rows", len(events), "err", err)
+	}
+}

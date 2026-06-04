@@ -1,0 +1,335 @@
+# =============================================================================
+# certctl base compose — PRODUCTION-SHAPED (Bundle 2, 2026-05-12)
+# =============================================================================
+#
+# This base file ships a SAFE-BY-DEFAULT control plane:
+#
+#   - CERTCTL_AUTH_TYPE defaults to api-key (the code default; not overridden
+#     here). The server REFUSES to start with auth=none on a non-loopback
+#     bind unless CERTCTL_DEMO_MODE_ACK=true (Audit 2026-05-10 HIGH-12 +
+#     Bundle 2 closure: see internal/config/config.go::Validate).
+#   - CERTCTL_KEYGEN_MODE defaults to agent (the code default).
+#   - CERTCTL_DEMO_SEED defaults to false (the code default; the 180-day
+#     simulated history seed only runs under the demo overlay).
+#   - Default placeholder credentials (`change-me-...` sentinels) are NOT
+#     interpolated by this compose. The server REFUSES to start when those
+#     placeholder strings reach config (Bundle 2 fail-closed guards) unless
+#     DEMO_MODE_ACK=true. Operators MUST set:
+#         POSTGRES_PASSWORD               (openssl rand -hex 32)
+#         CERTCTL_AUTH_SECRET             (openssl rand -hex 32)
+#         CERTCTL_CONFIG_ENCRYPTION_KEY   (openssl rand -base64 32)
+#         CERTCTL_API_KEY                 (matches CERTCTL_AUTH_SECRET or one
+#                                          of its rotation siblings)
+#         CERTCTL_AGENT_ID                (returned from POST /api/v1/agents)
+#     in deploy/.env or the shell environment. See deploy/.env.example.
+#
+# USAGE
+# -----
+#
+# Production-shaped (this base alone):
+#   docker compose -f deploy/docker-compose.yml up -d
+#
+# Bundled demo (zero-config, populated dashboard, demo-mode auth):
+#   docker compose -f deploy/docker-compose.yml \
+#                  -f deploy/docker-compose.demo.yml up -d
+#
+# The demo overlay (docker-compose.demo.yml) layers in the demo-mode env
+# vars (AUTH_TYPE=none + DEMO_MODE_ACK=true + KEYGEN_MODE=server +
+# DEMO_SEED=true + the change-me placeholder creds). It exists so the
+# `docker compose up` smoke + screenshot path stays one command — but it
+# ALSO carries the operator-visible warning banner the server emits at
+# boot when DEMO_MODE_ACK=true.
+#
+# Pre-Bundle-2 this base file WAS the demo path. The split happened in
+# 2026-05-12; the README quickstart, deploy/ENVIRONMENTS.md, and the
+# cold-DB compose smoke in .github/workflows/ci.yml were updated in the
+# same commit to point at the new layout.
+name: certctl
+
+services:
+  # HTTPS-Everywhere Phase 3 — self-signed TLS bootstrap (init container).
+  # Generates a CN=certctl-server ECDSA-P256 (SHA-256 signature) cert with
+  # the SAN list locked by milestone §3.6 on first boot; subsequent boots
+  # see the cert already present in the `certs` named volume and no-op out.
+  # Server + agent mount the volume read-only. Destroy via `docker compose
+  # down -v` to force regeneration. This bootstrap is for docker-compose
+  # demos and local dev only; Helm operators supply a Secret / cert-manager
+  # Certificate per docs/tls.md.
+  #
+  # Rationale for ECDSA-P256 (was ed25519 pre-v2.0.48): Apple's TLS stack
+  # — Safari Network Framework and the macOS-bundled LibreSSL 3.3.6
+  # /usr/bin/curl — does not advertise ed25519 in the ClientHello
+  # signature_algorithms extension for server certs, yielding "tls: peer
+  # doesn't support any of the certificate's signature algorithms" at
+  # handshake. ECDSA-P256 with SHA-256 is universally supported. See
+  # docs/tls.md Pattern 1.
+  certctl-tls-init:
+    # DEPL-002 closure (Sprint 3, 2026-05-16): digest-pin so the
+    # production-shaped compose has the same supply-chain posture as
+    # the certctl Dockerfiles (which CI guards via digest-validity.sh).
+    # The :latest tag floats; the digest is captured at the time
+    # this comment was written. Bump after running the digest-
+    # validity guard to confirm the new digest is still pullable.
+    image: alpine/openssl:latest@sha256:41036db23542ed4cc09bc278d8a7e23b3da01690abb4b0e353b1bb87d70520ed
+    container_name: certctl-tls-init
+    restart: "no"
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        set -eu
+        CERT=/etc/certctl/tls/server.crt
+        KEY=/etc/certctl/tls/server.key
+        CA=/etc/certctl/tls/ca.crt
+        if [ -f "$$CERT" ] && [ -f "$$KEY" ] && [ -f "$$CA" ]; then
+          echo "TLS cert already present at $$CERT — skipping generation"
+        else
+          mkdir -p /etc/certctl/tls
+          openssl req -x509 -newkey ec \
+            -pkeyopt ec_paramgen_curve:P-256 \
+            -nodes \
+            -keyout "$$KEY" \
+            -out "$$CERT" \
+            -days 3650 \
+            -subj "/CN=certctl-server" \
+            -addext "subjectAltName=DNS:certctl-server,DNS:localhost,IP:127.0.0.1,IP:::1"
+          cp "$$CERT" "$$CA"
+          echo "Generated self-signed TLS cert for certctl-server (ECDSA-P256/SHA-256, 3650d, CN=certctl-server)"
+        fi
+        # certctl binary runs as UID 1000 inside the server container per
+        # Dockerfile:64-65; the cert + key must be readable by that UID.
+        chown 1000:1000 "$$CERT" "$$KEY" "$$CA"
+        chmod 0644 "$$CERT" "$$CA"
+        chmod 0600 "$$KEY"
+    volumes:
+      - certs:/etc/certctl/tls
+    networks:
+      - certctl-network
+
+  # PostgreSQL database
+  #
+  # U-3 (P1, cat-u-seed_initdb_schema_drift, GitHub #10):
+  # Pre-U-3 this stack mounted a hand-curated subset of `migrations/*.up.sql`
+  # plus `seed.sql` into `/docker-entrypoint-initdb.d/`, and postgres
+  # initdb-applied them on first boot. The mount list rotted every time a
+  # new migration shipped that the seed depended on (000013 added
+  # policy_rules.severity, 000017 renames retry_interval_minutes, etc.) —
+  # initdb crashed, the container reported `unhealthy` indefinitely, and
+  # `docker compose -f deploy/docker-compose.yml up -d --build` from a
+  # fresh clone of v2.0.50 hit it on the first try.
+  #
+  # Post-U-3 the schema is built EXCLUSIVELY by the server at startup via
+  # internal/repository/postgres.RunMigrations + RunSeed. Single source of
+  # truth, no list to keep in sync. Postgres comes up empty; the server
+  # waits for it healthy, then applies the full migration ladder + seed in
+  # one shot. Helm + the dev examples were already runtime-only (Path B)
+  # and worked through the same window.
+  #
+  # `start_period: 30s` gives postgres room to bootstrap on slow runners
+  # (CI macOS, low-spec laptops) before the healthcheck failure counter
+  # starts ticking. Pre-U-3 a slow first-init combined with the
+  # `unhealthy` flap to cascade into certctl-server's `service_healthy`
+  # depends_on, blocking the whole stack.
+  postgres:
+    # DEPL-002 closure (Sprint 3, 2026-05-16): digest-pin matching the
+    # alpine/openssl pin above. The `16-alpine` tag is the stable
+    # major-version stream; the digest snapshots today's image so a
+    # silent upstream rebuild can't slip into a production deploy
+    # mid-rollout. Bump alongside dependency reviews.
+    image: postgres:16-alpine@sha256:890480b08124ce7f79960a9bb16fe39729aa302bd384bfd7c408fee6c8f7adb7
+    container_name: certctl-postgres
+    environment:
+      POSTGRES_DB: certctl
+      POSTGRES_USER: certctl
+      # Bundle 2 closure: no `:-certctl` fallback. Operators MUST set
+      # POSTGRES_PASSWORD in deploy/.env or the shell environment. The
+      # demo overlay (docker-compose.demo.yml) supplies a fixed weak
+      # default for screenshot/demo use; production deploys never
+      # depend on that fallback.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    # Acquisition-audit SEC-014 closure (Sprint 2, 2026-05-16). Bind
+    # the published port to 127.0.0.1 ONLY — the certctl-server
+    # connection comes in via the `certctl-network` Docker network
+    # (the host-port mapping is operator convenience for psql / DB
+    # inspection only). Pre-fix, the "5432:5432" form bound on
+    # 0.0.0.0, exposing the Postgres TCP listener on every interface
+    # of any host that happened to be on a public IP. The loopback
+    # bind keeps host-side psql access working while preventing the
+    # cross-network exposure landmine for compose deploys that aren't
+    # behind a firewall.
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - certctl-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U certctl -d certctl"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # Certctl Server (API + scheduler)
+  certctl-server:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      # Proxy propagation (M-4, Issue #9) — forwards host shell's proxy env
+      # vars into the Docker build so the Node frontend stage and Go module
+      # download can reach the public registries behind corporate proxies.
+      # Defaults to empty; omit the variables from the host environment for
+      # un-proxied builds and the behaviour is byte-identical to the pre-fix
+      # tree.
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
+    container_name: certctl-server
+    depends_on:
+      postgres:
+        condition: service_healthy
+      certctl-tls-init:
+        condition: service_completed_successfully
+    environment:
+      # Bundle B / Audit M-018 (PCI-DSS Req 4 / CWE-319): in-cluster Postgres
+      # on the docker bridge network keeps sslmode=disable acceptable; for
+      # external/managed Postgres operators MUST override CERTCTL_DATABASE_URL
+      # with sslmode=verify-full and provide the CA bundle. See docs/database-tls.md.
+      CERTCTL_DATABASE_URL: ${CERTCTL_DATABASE_URL:-postgres://certctl:${POSTGRES_PASSWORD}@postgres:5432/certctl?sslmode=disable}
+      CERTCTL_SERVER_HOST: 0.0.0.0
+      CERTCTL_SERVER_PORT: 8443
+      CERTCTL_SERVER_TLS_CERT_PATH: /etc/certctl/tls/server.crt
+      CERTCTL_SERVER_TLS_KEY_PATH: /etc/certctl/tls/server.key
+      CERTCTL_LOG_LEVEL: info
+      # Bundle 2 closure (compose split). The base compose no longer
+      # sets CERTCTL_AUTH_TYPE / CERTCTL_KEYGEN_MODE / DEMO_MODE_ACK /
+      # DEMO_SEED — the code defaults take over (auth-type api-key,
+      # keygen agent, demo-mode false, demo-seed false). The demo
+      # overlay (docker-compose.demo.yml) is what flips this baseline
+      # into the populated-dashboard demo path; without that overlay
+      # the server boots production-shaped and refuses to start unless
+      # the operator has supplied CERTCTL_AUTH_SECRET +
+      # CERTCTL_CONFIG_ENCRYPTION_KEY.
+      #
+      # Audit 2026-05-10 HIGH-12: when DEMO_MODE_ACK=true (set by the
+      # demo overlay) AND the listener binds to a non-loopback address,
+      # every request is served as the synthetic admin actor
+      # `actor-demo-anon`. The server emits a prominent boot-time WARN
+      # banner with a production-promotion checklist in that case.
+      CERTCTL_AUTH_SECRET: ${CERTCTL_AUTH_SECRET}
+      CERTCTL_NETWORK_SCAN_ENABLED: "true"  # Enable network scan GUI
+      CERTCTL_CONFIG_ENCRYPTION_KEY: ${CERTCTL_CONFIG_ENCRYPTION_KEY}  # AES-256-GCM for dynamic issuer/target config
+      # Bootstrap token interpolation surface (Auditable Codebase Bundle
+      # cold-DB smoke closure, 2026-05-12). Pre-fix, the `env-file +
+      # --force-recreate certctl-server` pattern documented in
+      # cowork/manual-testing-bundle-2.html (and used by the cold-DB
+      # smoke job in .github/workflows/ci.yml::cold-db-compose-smoke)
+      # set CERTCTL_BOOTSTRAP_TOKEN in compose's own interpolation
+      # environment but the container never received it because this
+      # block didn't reference the variable. Wiring it as an explicit
+      # interpolation (default empty) makes the documented manual flow
+      # actually work end-to-end. Empty value = bootstrap strategy
+      # disabled (server returns 410 Gone on POST /api/v1/auth/bootstrap),
+      # which is the safe default — only set the var when you intend to
+      # mint a day-0 admin via the bootstrap path.
+      CERTCTL_BOOTSTRAP_TOKEN: ${CERTCTL_BOOTSTRAP_TOKEN:-}
+    ports:
+      - "8443:8443"
+    volumes:
+      - certs:/etc/certctl/tls:ro
+    networks:
+      - certctl-network
+    healthcheck:
+      test: ["CMD", "curl", "--cacert", "/etc/certctl/tls/ca.crt", "-f", "https://localhost:8443/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      # U-3: server boot now does RunMigrations + RunSeed before listening on
+      # 8443. On a fresh clone the full migration ladder + seed application
+      # can take ~10s on a small VM; start_period prevents the first few
+      # healthcheck attempts from counting as failures while that work runs.
+      start_period: 30s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+
+  # Certctl Agent
+  certctl-agent:
+    build:
+      context: ..
+      dockerfile: Dockerfile.agent
+      # Proxy propagation (M-4, Issue #9) — forwards host shell's proxy env
+      # vars into the Docker build so the Go module download stage can reach
+      # the public Go module proxy behind corporate proxies. Defaults to
+      # empty; omit the variables from the host environment for un-proxied
+      # builds and the behaviour is byte-identical to the pre-fix tree.
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
+    container_name: certctl-agent
+    depends_on:
+      certctl-server:
+        condition: service_healthy
+    environment:
+      CERTCTL_SERVER_URL: https://certctl-server:8443
+      CERTCTL_SERVER_CA_BUNDLE_PATH: /etc/certctl/tls/ca.crt
+      # Bundle 2 closure (compose split). No placeholder fallbacks.
+      # Operators MUST set CERTCTL_API_KEY (matching one of the server's
+      # CERTCTL_AUTH_SECRET rotation values) and CERTCTL_AGENT_ID
+      # (returned from `POST /api/v1/agents` during agent enrollment).
+      # Without an agent ID, cmd/agent/main.go fails fast at startup
+      # with "agent-id flag or CERTCTL_AGENT_ID env var is required" —
+      # the cold-DB compose smoke in .github/workflows/ci.yml tolerates
+      # the agent restart loop because the smoke targets server boot
+      # only. The demo overlay (docker-compose.demo.yml) supplies a
+      # pre-seeded agent-demo-1 row + matching env vars so the demo
+      # path stays one-command.
+      CERTCTL_API_KEY: ${CERTCTL_API_KEY}
+      CERTCTL_AGENT_ID: ${CERTCTL_AGENT_ID}
+      CERTCTL_AGENT_NAME: docker-agent
+      CERTCTL_LOG_LEVEL: info
+      CERTCTL_DISCOVERY_DIRS: /var/lib/certctl/keys  # Agent scans this directory for existing certificates
+    volumes:
+      - agent_keys:/var/lib/certctl/keys
+      - certs:/etc/certctl/tls:ro
+    networks:
+      - certctl-network
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f certctl-agent || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+networks:
+  certctl-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  agent_keys:
+    driver: local
+  certs:
+    driver: local

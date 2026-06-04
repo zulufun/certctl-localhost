@@ -1,0 +1,139 @@
+# Load-test workflow — closes the #8 acquisition-readiness blocker from
+# the 2026-05-01 issuer coverage audit (see
+# the 2026-05-01 issuer coverage audit).
+#
+# CADENCE: workflow_dispatch + weekly cron, NOT per-push. Load tests
+# are minutes long and don't provide useful per-PR signal — per-push
+# pressure goes through ci.yml. This workflow exists to (a) catch
+# gradual regressions from cumulative changes that no single PR
+# triggered, and (b) give an operator a one-click way to capture
+# numbers before tagging a release.
+#
+# THRESHOLDS: defined in deploy/test/loadtest/k6.js (p99 < 5s for
+# issuance-acceptance, p99 < 2s for list, error rate < 1%). k6 exits
+# non-zero on any breach, which propagates through `docker compose up
+# --exit-code-from k6` → `make loadtest` → this workflow's exit.
+
+name: loadtest
+
+on:
+  workflow_dispatch:
+    # Manual trigger from the Actions tab. Use before tagging a
+    # release or after a meaningful tuning commit.
+
+  schedule:
+    # Mondays at 06:00 UTC. Off-peak; catches regressions accumulated
+    # over the previous week's merges. Once a baseline is committed
+    # in deploy/test/loadtest/README.md, drift relative to that
+    # baseline is the signal — diff the captured summary.json
+    # against the committed numbers.
+    - cron: '0 6 * * 1'
+
+# Reduce permissions — this workflow doesn't write to PRs or push tags.
+permissions:
+  contents: read
+
+jobs:
+  k6:
+    name: k6 throughput run
+    runs-on: ubuntu-latest
+    # 25-minute hard cap. Pre-Bundle-10: 15min was enough for the API
+    # tier alone (~7 minutes total). Post-Bundle-10 the harness boots
+    # four additional target sidecars (nginx, apache, haproxy, f5-mock)
+    # before the k6 run; their healthchecks add ~30-60s. The k6 scenarios
+    # themselves are still 5 minutes (run in parallel with the API
+    # scenarios, not serially). 25 minutes absorbs that plus slow CI
+    # runners and cold image caches without letting a stuck container
+    # consume the runner indefinitely.
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Set up Docker Buildx
+        # The compose stack builds the certctl image from the repo
+        # root Dockerfile. Buildx gives the build a usable cache and
+        # works with newer compose versions.
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+
+      - name: Run loadtest
+        run: make loadtest
+        env:
+          # Disable BuildKit progress noise so the run log is
+          # diff-able against past runs.
+          BUILDKIT_PROGRESS: plain
+
+      - name: Upload summary
+        # Always upload the summary so a regression has a diffable
+        # artifact even when k6 exited non-zero. summary.json is the
+        # authoritative machine-readable form; summary.txt is the
+        # human-readable text the README baseline tracks.
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: k6-summary-${{ github.run_id }}
+          path: deploy/test/loadtest/results/
+          retention-days: 90
+
+  # ---------------------------------------------------------------------------
+  # Phase 8 SCALE-H2 — scale-tier scenarios. Three new k6 drivers:
+  #   - bulk-renewal: 10K-cert seed + criteria-mode POST /bulk-renew
+  #   - acme-burst:   200 concurrent VUs against directory/nonce/ARI
+  #   - agent-storm:  5K-agent seed + 167 heartbeats/sec sustained
+  #
+  # Matrix dispatch so each scenario runs on its own runner and a
+  # regression in one doesn't mask another. The matrix runs in parallel,
+  # which keeps total wall time around the existing 25-minute cap rather
+  # than ~70 minutes serialised. Each scenario brings up the full
+  # loadtest compose stack independently — there's no shared state
+  # between scenarios that would benefit from a single-runner serial
+  # invocation.
+  #
+  # Cadence: same as the API + connector tier job above (workflow_dispatch
+  # + Mondays 06:00 UTC). The scale scenarios DO produce useful per-PR
+  # signal in theory, but the per-run cost (image build + 5min run × 3)
+  # is too high to gate on every PR; weekly is the right trade-off.
+  # ---------------------------------------------------------------------------
+  k6-scale:
+    name: k6 scale tier (${{ matrix.scenario }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: k6
+    strategy:
+      # Parallel: a failure in one scenario shouldn't cancel the others.
+      # Each scenario's threshold breach is independent diagnostic data.
+      fail-fast: false
+      matrix:
+        scenario:
+          - bulk-renewal
+          - acme-burst
+          - agent-storm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+
+      - name: Run scale loadtest (${{ matrix.scenario }})
+        env:
+          BUILDKIT_PROGRESS: plain
+        run: |
+          case "${{ matrix.scenario }}" in
+            bulk-renewal) make loadtest-scale-bulk ;;
+            acme-burst)   make loadtest-scale-acme ;;
+            agent-storm)  make loadtest-scale-agent ;;
+            *) echo "::error::unknown scenario ${{ matrix.scenario }}"; exit 1 ;;
+          esac
+
+      - name: Upload summary
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          # Per-scenario artifact name so the three matrix runs don't
+          # collide on upload.
+          name: k6-scale-${{ matrix.scenario }}-${{ github.run_id }}
+          path: deploy/test/loadtest/results/
+          retention-days: 90

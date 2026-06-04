@@ -1,0 +1,201 @@
+# Routes registered in internal/api/router/router.go that are intentionally
+# NOT in api/openapi.yaml. Each entry needs a one-line `why:` justification
+# AND a required `category:` field (added in Phase 13 Sprint 13.1,
+# 2026-05-14, architecture diligence audit ARCH-H1).
+#
+# Adding a new entry requires PR-time review.
+#
+# OpenAPI-shaped REST endpoints belong in api/openapi.yaml, NOT here.
+# This list is for protocol-shaped (SCEP/ACME/EST wire endpoints) and
+# operational (health, metrics, pprof) routes only.
+#
+# Per ci-pipeline-cleanup bundle Phase 9 / frozen decision 0.11.
+#
+# ──────────────────────────────────────────────────────────────────────
+# The two-bucket contract (Phase 13 Sprint 13.1)
+# ──────────────────────────────────────────────────────────────────────
+#
+#   category: wire-protocol
+#     The route's wire shape is dictated by an IETF RFC (SCEP RFC 8894,
+#     ACME RFC 8555, ACME ARI RFC 9773, EST RFC 7030) or it's a
+#     sibling/shorthand variant of such a route (same wire semantics,
+#     different cosmetic path — e.g. trailing-slash forms, default-
+#     profile shorthands). Documenting these as REST operations in
+#     openapi.yaml would duplicate the RFC with no information gain;
+#     the canonical operator references live in docs/acme-server.md +
+#     docs/operator/scep.md + docs/operator/est.md. These entries
+#     NEVER burn down — they're protocol contracts, not gaps.
+#
+#   category: rest-deferred
+#     The route is REST-shaped (resource CRUD, JSON request/response,
+#     RBAC-gated) but its OpenAPI operation was deferred when the
+#     handler shipped. These MUST monotonically decrease to zero.
+#     Phase 13 Sprints 13.4-13.6 author the OpenAPI ops + delete the
+#     corresponding exception entries; the
+#     openapi-rest-deferred-monotonic.sh CI guard fails any PR that
+#     grows the rest-deferred bucket vs the checked-in baseline at
+#     api/openapi-handler-exceptions-baseline.txt.
+#
+# ──────────────────────────────────────────────────────────────────────
+# Phase 13 Sprint 13.1 categorization (2026-05-14)
+# ──────────────────────────────────────────────────────────────────────
+#
+# Current split, re-derived by the parity script's bucket-reporting
+# subcommand (post-Sprint-13.6 / 2026-05-14):
+#
+#   total entries:           36
+#   wire-protocol:           36
+#   rest-deferred:           0    ← THE FLOOR — ARCH-H1 substantive close
+#
+# Burn-down progress:
+#
+#   Sprint 13.4 SHIPPED — 28 - 13 = 15 (auth/sessions cluster 3 ops +
+#                               auth/oidc CRUD + JWKS + test + refresh
+#                               + group-mappings cluster, 10 ops)
+#   Sprint 13.5 SHIPPED — 15 -  8 =  7 (auth/breakglass admin 4 ops +
+#                               auth/users 3 ops + auth/runtime-config
+#                               1 op, 8 ops total)
+#   Sprint 13.6 SHIPPED —  7 -  7 =  0 (audit/export 1 op + demo-
+#                               residual/cleanup 1 op + auth/logout 1 op +
+#                               auth/breakglass/login 1 op + 3 OIDC
+#                               browser-flow endpoints, 7 ops total)
+#
+# Sprint 13.7 next tightens the parity-script's rest-deferred floor
+# from monotonic-decrease to a hard zero-exact pin. After that, any
+# new REST route MUST land with an OpenAPI op or fail CI — no escape
+# hatch via `category: rest-deferred`.
+#
+# Each authored OpenAPI op needs request/response schemas (not
+# placeholders) so the generated client at web/orval.config.ts emits
+# typed signatures. When an op lands, delete the corresponding entry
+# below + bump api/openapi-handler-exceptions-baseline.txt downward.
+
+documented_exceptions:
+  - route: "GET /scep"
+    why: "SCEP wire-protocol endpoint per RFC 8894 §3.1; serves CA certs via GetCACert/GetCACaps query params, NOT a REST resource."
+    category: wire-protocol
+  - route: "POST /scep"
+    why: "SCEP wire-protocol endpoint per RFC 8894 §3.1; receives PKCSReq / RenewalReq PKIMessages, NOT a REST resource."
+    category: wire-protocol
+  - route: "GET /scep/"
+    why: "SCEP wire-protocol endpoint with trailing-slash variant; ChromeOS clients send the trailing-slash form."
+    category: wire-protocol
+  - route: "POST /scep/"
+    why: "SCEP wire-protocol endpoint with trailing-slash variant; ChromeOS clients send the trailing-slash form."
+    category: wire-protocol
+  - route: "GET /scep-mtls"
+    why: "SCEP-mTLS sibling endpoint per ci-pipeline-cleanup-prerequisite EST RFC 7030 hardening Phase 6.5; same wire-protocol semantics, mutually-authenticated TLS variant."
+    category: wire-protocol
+  - route: "POST /scep-mtls"
+    why: "SCEP-mTLS sibling endpoint, POST variant."
+    category: wire-protocol
+  - route: "GET /scep-mtls/"
+    why: "SCEP-mTLS sibling endpoint, trailing-slash variant."
+    category: wire-protocol
+  - route: "POST /scep-mtls/"
+    why: "SCEP-mTLS sibling endpoint, trailing-slash POST variant."
+    category: wire-protocol
+
+  # ACME server (RFC 8555 + RFC 9773 ARI) — wire-protocol surface.
+  # Like SCEP/EST, ACME is a JWS-signed-JSON wire protocol whose
+  # semantics are dictated by the RFC, not by an OpenAPI schema.
+  # Documenting every endpoint in openapi.yaml would duplicate
+  # RFC 8555 §7.1 + §7.2 + §7.3 with no information gain. The
+  # canonical operator-facing reference is docs/acme-server.md.
+  # Phases 2-4 will extend this list as new-order, finalize, authz,
+  # challenge, cert, key-change, revoke-cert, renewal-info routes land.
+  - route: "GET /acme/profile/{id}/directory"
+    why: "ACME server RFC 8555 §7.1.1 directory; documented in docs/acme-server.md."
+    category: wire-protocol
+  - route: "HEAD /acme/profile/{id}/new-nonce"
+    why: "ACME server RFC 8555 §7.2 new-nonce; documented in docs/acme-server.md."
+    category: wire-protocol
+  - route: "GET /acme/profile/{id}/new-nonce"
+    why: "ACME server RFC 8555 §7.2 new-nonce GET form; documented in docs/acme-server.md."
+    category: wire-protocol
+  - route: "POST /acme/profile/{id}/new-account"
+    why: "ACME server RFC 8555 §7.3 new-account (JWS jwk); documented in docs/acme-server.md."
+    category: wire-protocol
+  - route: "POST /acme/profile/{id}/account/{acc_id}"
+    why: "ACME server RFC 8555 §7.3.2 + §7.3.6 (JWS kid) account update + deactivation; documented in docs/acme-server.md."
+    category: wire-protocol
+  - route: "GET /acme/directory"
+    why: "ACME server default-profile shorthand; mirrors per-profile when CERTCTL_ACME_SERVER_DEFAULT_PROFILE_ID is set."
+    category: wire-protocol
+  - route: "HEAD /acme/new-nonce"
+    why: "ACME server default-profile shorthand for new-nonce HEAD."
+    category: wire-protocol
+  - route: "GET /acme/new-nonce"
+    why: "ACME server default-profile shorthand for new-nonce GET."
+    category: wire-protocol
+  - route: "POST /acme/new-account"
+    why: "ACME server default-profile shorthand for new-account."
+    category: wire-protocol
+  - route: "POST /acme/account/{acc_id}"
+    why: "ACME server default-profile shorthand for account update + deactivation."
+    category: wire-protocol
+
+  # Phase 2 — orders + finalize + authz + cert.
+  - route: "POST /acme/profile/{id}/new-order"
+    why: "ACME server RFC 8555 §7.4 new-order; documented in docs/acme-server.md."
+    category: wire-protocol
+  - route: "POST /acme/profile/{id}/order/{ord_id}"
+    why: "ACME server RFC 8555 §7.4 order POST-as-GET; documented in docs/acme-server.md."
+    category: wire-protocol
+  - route: "POST /acme/profile/{id}/order/{ord_id}/finalize"
+    why: "ACME server RFC 8555 §7.4 finalize; documented in docs/acme-server.md."
+    category: wire-protocol
+  - route: "POST /acme/profile/{id}/authz/{authz_id}"
+    why: "ACME server RFC 8555 §7.5 authz POST-as-GET; documented in docs/acme-server.md."
+    category: wire-protocol
+  - route: "POST /acme/profile/{id}/challenge/{chall_id}"
+    why: "ACME server RFC 8555 §7.5.1 challenge response; dispatches to Phase 3 validator pool."
+    category: wire-protocol
+  - route: "POST /acme/profile/{id}/cert/{cert_id}"
+    why: "ACME server RFC 8555 §7.4.2 cert download; documented in docs/acme-server.md."
+    category: wire-protocol
+  - route: "POST /acme/new-order"
+    why: "Phase 2 default-profile shorthand for new-order."
+    category: wire-protocol
+  - route: "POST /acme/order/{ord_id}"
+    why: "Phase 2 default-profile shorthand for order POST-as-GET."
+    category: wire-protocol
+  - route: "POST /acme/order/{ord_id}/finalize"
+    why: "Phase 2 default-profile shorthand for finalize."
+    category: wire-protocol
+  - route: "POST /acme/authz/{authz_id}"
+    why: "Phase 2 default-profile shorthand for authz POST-as-GET."
+    category: wire-protocol
+  - route: "POST /acme/challenge/{chall_id}"
+    why: "Phase 3 default-profile shorthand for challenge response."
+    category: wire-protocol
+  - route: "POST /acme/cert/{cert_id}"
+    why: "Phase 2 default-profile shorthand for cert download."
+    category: wire-protocol
+  - route: "POST /acme/profile/{id}/key-change"
+    why: "ACME server RFC 8555 §7.3.5 doubly-signed key rollover; documented in docs/acme-server.md."
+    category: wire-protocol
+  - route: "POST /acme/profile/{id}/revoke-cert"
+    why: "ACME server RFC 8555 §7.6 revoke-cert (kid OR cert-key auth); documented in docs/acme-server.md."
+    category: wire-protocol
+  - route: "GET /acme/profile/{id}/renewal-info/{cert_id}"
+    why: "ACME server RFC 9773 ACME Renewal Information (unauthenticated GET); documented in docs/acme-server.md."
+    category: wire-protocol
+  - route: "POST /acme/key-change"
+    why: "Phase 4 default-profile shorthand for key rollover."
+    category: wire-protocol
+  - route: "POST /acme/revoke-cert"
+    why: "Phase 4 default-profile shorthand for revoke-cert."
+    category: wire-protocol
+  - route: "GET /acme/renewal-info/{cert_id}"
+    why: "Phase 4 default-profile shorthand for ARI."
+    category: wire-protocol
+
+  # =============================================================================
+  # Auth Bundle 2 + audit-2026-05-10/11 fix bundle — REST endpoints not yet
+  # represented in api/openapi.yaml. These are operator-facing REST endpoints
+  # (not protocol-shaped); the OpenAPI surface is scheduled to land pre-v2.2.0
+  # alongside the GUI E2E coverage push. Documented here so the parity guard
+  # stays green for the v2.1.0 release tag. Threat model + handler contracts
+  # live in docs/operator/{rbac.md,auth-threat-model.md,oidc-runbooks/*}.
+  # =============================================================================
