@@ -52,6 +52,42 @@ VALUES (
   'amd64',
   '10.30.50.8',
   'test'
+),
+(
+  'agent-test-f5',
+  'agent-02-f5',
+  'certctl-test-agent-f5',
+  'online',
+  NOW(),
+  'cad819dee454889f686d678f691e5084e58ba149762eae2fda4d0bd2abaceefa',
+  'linux',
+  'amd64',
+  '10.30.50.9',
+  'test'
+),
+(
+  'agent-test-k8s',
+  'agent-03-k8s',
+  'certctl-test-agent-k8s',
+  'online',
+  NOW(),
+  'cad819dee454889f686d678f691e5084e58ba149762eae2fda4d0bd2abaceefa',
+  'linux',
+  'amd64',
+  '10.30.50.10',
+  'test'
+),
+(
+  'agent-test-iis',
+  'agent-04-iis',
+  'certctl-test-agent-iis',
+  'online',
+  NOW(),
+  'cad819dee454889f686d678f691e5084e58ba149762eae2fda4d0bd2abaceefa',
+  'windows',
+  'amd64',
+  '10.30.50.11',
+  'test'
 ) ON CONFLICT (id) DO NOTHING;
 
 -- The network scanner uses "server-scanner" as a virtual agent.
