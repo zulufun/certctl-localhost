@@ -42,8 +42,7 @@ export const typeLabels: Record<string, string> = {
   stepca: 'step-ca',          // backward compat for old DB records
   OpenSSL: 'OpenSSL/Custom',
   openssl: 'OpenSSL/Custom',  // backward compat for old DB records
-  VaultPKI: 'Vault PKI',
-  EJBCA: 'EJBCA',
+
 };
 
 /**
@@ -88,19 +87,6 @@ export const issuerTypes: IssuerTypeConfig[] = [
     ],
   },
   {
-    id: 'VaultPKI',
-    name: 'Vault PKI',
-    description: 'HashiCorp Vault PKI secrets engine',
-    icon: '\uD83D\uDD10',
-    configFields: [
-      { key: 'addr', label: 'Vault Address', placeholder: 'https://vault.internal:8200', required: true },
-      { key: 'token', label: 'Vault Token', placeholder: 'hvs.CAES...', required: true, type: 'password', sensitive: true },
-      { key: 'mount', label: 'PKI Mount Path', placeholder: 'pki', required: false, defaultValue: 'pki' },
-      { key: 'role', label: 'PKI Role Name', placeholder: 'web-certs', required: true },
-      { key: 'ttl', label: 'Certificate TTL', placeholder: '8760h', required: false, defaultValue: '8760h' },
-    ],
-  },
-  {
     id: 'OpenSSL',
     name: 'OpenSSL/Custom',
     description: 'Script-based signing with your own CA',
@@ -110,22 +96,6 @@ export const issuerTypes: IssuerTypeConfig[] = [
       { key: 'revoke_script', label: 'Revoke Script Path (optional)', placeholder: '/path/to/revoke.sh', required: false },
       { key: 'crl_script', label: 'CRL Script Path (optional)', placeholder: '/path/to/crl.sh', required: false },
       { key: 'timeout_seconds', label: 'Timeout (seconds)', placeholder: '30', type: 'number', required: false },
-    ],
-  },
-  {
-    id: 'EJBCA',
-    name: 'EJBCA',
-    description: 'Keyfactor EJBCA with mTLS or OAuth2 auth',
-    icon: '\uD83D\uDD11',
-    configFields: [
-      { key: 'api_url', label: 'API URL', placeholder: 'https://ejbca.example.com:8443/ejbca/ejbca-rest-api/v1', required: true },
-      { key: 'auth_mode', label: 'Auth Mode', type: 'select', options: ['mtls', 'oauth2'], required: false, defaultValue: 'mtls' },
-      { key: 'client_cert_path', label: 'Client Certificate Path', placeholder: '/path/to/client.crt', required: false },
-      { key: 'client_key_path', label: 'Client Key Path', placeholder: '/path/to/client.key', required: false, sensitive: true },
-      { key: 'token', label: 'OAuth2 Token', placeholder: 'Bearer token (for oauth2 mode)', required: false, type: 'password', sensitive: true },
-      { key: 'ca_name', label: 'CA Name', placeholder: 'EJBCA CA name', required: true },
-      { key: 'cert_profile', label: 'Certificate Profile', placeholder: 'EJBCA cert profile (optional)', required: false },
-      { key: 'ee_profile', label: 'End Entity Profile', placeholder: 'EJBCA EE profile (optional)', required: false },
     ],
   },
 ];

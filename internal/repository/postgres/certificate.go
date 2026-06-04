@@ -274,7 +274,7 @@ func (r *CertificateRepository) Get(ctx context.Context, id string) (*domain.Man
 
 	cert, err := r.scanCertificate(ctx, row)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("certificate not found: %w", repository.ErrNotFound)
 		}
 		return nil, fmt.Errorf("failed to query certificate: %w", err)

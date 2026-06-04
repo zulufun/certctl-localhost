@@ -1,0 +1,63 @@
+name: certctl-agent-test-cert
+
+services:
+  pebble-challtestsrv:
+    image: ghcr.io/letsencrypt/pebble-challtestsrv:latest
+    container_name: certctl-agent-test-challtestsrv
+    command: -defaultIPv4 10.30.50.6 -defaultIPv6 "" -doh ""
+    networks:
+      certctl-agent-test:
+        ipv4_address: 10.30.50.3
+    restart: unless-stopped
+
+  pebble:
+    image: ghcr.io/letsencrypt/pebble:latest
+    container_name: certctl-agent-test-pebble
+    depends_on:
+      - pebble-challtestsrv
+    environment:
+      PEBBLE_VA_NOSLEEP: 1
+      PEBBLE_VA_ALWAYS_VALID: 0
+    command:
+      - -config
+      - /test/config/pebble-config.json
+      - -dnsserver
+      - "10.30.50.3:8053"
+      - -strict
+    volumes:
+      - ./test/pebble-config.json:/test/config/pebble-config.json:ro
+    networks:
+      certctl-agent-test:
+        ipv4_address: 10.30.50.4
+    restart: unless-stopped
+
+  step-ca:
+    image: smallstep/step-ca:latest
+    container_name: certctl-agent-test-stepca
+    environment:
+      DOCKER_STEPCA_INIT_NAME: "certctl-test-ca"
+      DOCKER_STEPCA_INIT_DNS_NAMES: "step-ca,localhost"
+      DOCKER_STEPCA_INIT_PROVISIONER_NAME: "admin"
+      DOCKER_STEPCA_INIT_PASSWORD: "password123"
+      DOCKER_STEPCA_INIT_ADDRESS: ":9000"
+    volumes:
+      - agent_test_stepca_data:/home/step
+    networks:
+      certctl-agent-test:
+        ipv4_address: 10.30.50.5
+    healthcheck:
+      test: ["CMD", "curl", "-fk", "https://localhost:9000/health"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 10
+    restart: unless-stopped
+
+networks:
+  certctl-agent-test:
+    external: true
+    name: certctl-agent-test_certctl-agent-test
+
+volumes:
+  agent_test_stepca_data:
+    driver: local

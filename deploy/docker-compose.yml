@@ -219,6 +219,7 @@ services:
       # `actor-demo-anon`. The server emits a prominent boot-time WARN
       # banner with a production-promotion checklist in that case.
       CERTCTL_AUTH_SECRET: ${CERTCTL_AUTH_SECRET}
+      CERTCTL_API_KEYS_NAMED: ${CERTCTL_API_KEYS_NAMED}
       CERTCTL_NETWORK_SCAN_ENABLED: "true"  # Enable network scan GUI
       CERTCTL_CONFIG_ENCRYPTION_KEY: ${CERTCTL_CONFIG_ENCRYPTION_KEY}  # AES-256-GCM for dynamic issuer/target config
       # Bootstrap token interpolation surface (Auditable Codebase Bundle
@@ -235,6 +236,8 @@ services:
       # which is the safe default — only set the var when you intend to
       # mint a day-0 admin via the bootstrap path.
       CERTCTL_BOOTSTRAP_TOKEN: ${CERTCTL_BOOTSTRAP_TOKEN:-}
+      CERTCTL_AGENT_BOOTSTRAP_TOKEN: ${CERTCTL_BOOTSTRAP_TOKEN:-}
+      CERTCTL_AGENT_BOOTSTRAP_TOKEN_DENY_EMPTY: "false"
     ports:
       - "8443:8443"
     volumes:
@@ -263,45 +266,53 @@ services:
           cpus: '1.0'
           memory: 512M
 
-  # Certctl Agent
-  certctl-agent:
+  # Test Nginx Server
+  nginx:
+    image: nginx:alpine
+    container_name: certctl-agent-test-nginx
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    volumes:
+      - ./test/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./test/nginx-entrypoint.sh:/entrypoint.sh:ro
+      - agent_test_nginx_certs:/etc/nginx/certs
+    ports:
+      - "8080:80"
+      - "8444:443"
+    networks:
+      - certctl-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fk https://localhost/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 5
+    restart: unless-stopped
+
+  # Certctl Agent (Nginx Test)
+  agent-01-nginx:
     build:
       context: ..
       dockerfile: Dockerfile.agent
-      # Proxy propagation (M-4, Issue #9) — forwards host shell's proxy env
-      # vars into the Docker build so the Go module download stage can reach
-      # the public Go module proxy behind corporate proxies. Defaults to
-      # empty; omit the variables from the host environment for un-proxied
-      # builds and the behaviour is byte-identical to the pre-fix tree.
       args:
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
         NO_PROXY: ${NO_PROXY:-}
-    container_name: certctl-agent
+    container_name: agent-01-nginx
     depends_on:
       certctl-server:
         condition: service_healthy
     environment:
       CERTCTL_SERVER_URL: https://certctl-server:8443
       CERTCTL_SERVER_CA_BUNDLE_PATH: /etc/certctl/tls/ca.crt
-      # Bundle 2 closure (compose split). No placeholder fallbacks.
-      # Operators MUST set CERTCTL_API_KEY (matching one of the server's
-      # CERTCTL_AUTH_SECRET rotation values) and CERTCTL_AGENT_ID
-      # (returned from `POST /api/v1/agents` during agent enrollment).
-      # Without an agent ID, cmd/agent/main.go fails fast at startup
-      # with "agent-id flag or CERTCTL_AGENT_ID env var is required" —
-      # the cold-DB compose smoke in .github/workflows/ci.yml tolerates
-      # the agent restart loop because the smoke targets server boot
-      # only. The demo overlay (docker-compose.demo.yml) supplies a
-      # pre-seeded agent-demo-1 row + matching env vars so the demo
-      # path stays one-command.
-      CERTCTL_API_KEY: ${CERTCTL_API_KEY}
-      CERTCTL_AGENT_ID: ${CERTCTL_AGENT_ID}
-      CERTCTL_AGENT_NAME: docker-agent
-      CERTCTL_LOG_LEVEL: info
-      CERTCTL_DISCOVERY_DIRS: /var/lib/certctl/keys  # Agent scans this directory for existing certificates
+      CERTCTL_API_KEY: agent-secret-2026
+      CERTCTL_AGENT_NAME: agent-01-nginx
+      CERTCTL_AGENT_ID: agent-test-01
+      CERTCTL_KEYGEN_MODE: agent
+      CERTCTL_LOG_LEVEL: debug
+      CERTCTL_DISCOVERY_DIRS: /nginx-certs
     volumes:
-      - agent_keys:/var/lib/certctl/keys
+      - agent_01_nginx_keys:/var/lib/certctl/keys
+      - agent_test_nginx_certs:/nginx-certs
       - certs:/etc/certctl/tls:ro
     networks:
       - certctl-network
@@ -322,6 +333,123 @@ services:
           cpus: '0.5'
           memory: 256M
 
+  # F5 Mock Target
+  f5-mock-icontrol:
+    build:
+      context: ..
+      dockerfile: deploy/test/f5-mock-icontrol/Dockerfile
+    container_name: certctl-f5-mock
+    ports:
+      - "20449:443"
+    networks:
+      - certctl-network
+
+  # Certctl Agent (F5 Test)
+  agent-02-f5:
+    build:
+      context: ..
+      dockerfile: Dockerfile.agent
+    container_name: agent-02-f5
+    depends_on:
+      certctl-server:
+        condition: service_healthy
+    environment:
+      CERTCTL_SERVER_URL: https://certctl-server:8443
+      CERTCTL_SERVER_CA_BUNDLE_PATH: /etc/certctl/tls/ca.crt
+      CERTCTL_API_KEY: agent-secret-2026
+      CERTCTL_AGENT_NAME: agent-02-f5
+      CERTCTL_AGENT_ID: agent-test-f5
+      CERTCTL_KEYGEN_MODE: agent
+      CERTCTL_LOG_LEVEL: debug
+    volumes:
+      - agent_02_f5_keys:/var/lib/certctl/keys
+      - certs:/etc/certctl/tls:ro
+    networks:
+      - certctl-network
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f certctl-agent || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  # K8s Kind Target
+  k8s-kind-test:
+    image: kindest/node:v1.31.0@sha256:7fbc5644a803286a69ff9c5695f03bb01b512896835e15df7df17f756f7245ac
+    container_name: certctl-k8s-test
+    privileged: true
+    networks:
+      - certctl-network
+
+  # Certctl Agent (K8s Test)
+  agent-03-k8s:
+    build:
+      context: ..
+      dockerfile: Dockerfile.agent
+    container_name: agent-03-k8s
+    depends_on:
+      certctl-server:
+        condition: service_healthy
+    environment:
+      CERTCTL_SERVER_URL: https://certctl-server:8443
+      CERTCTL_SERVER_CA_BUNDLE_PATH: /etc/certctl/tls/ca.crt
+      CERTCTL_API_KEY: agent-secret-2026
+      CERTCTL_AGENT_NAME: agent-03-k8s
+      CERTCTL_AGENT_ID: agent-test-k8s
+      CERTCTL_KEYGEN_MODE: agent
+      CERTCTL_LOG_LEVEL: debug
+    volumes:
+      - agent_03_k8s_keys:/var/lib/certctl/keys
+      - certs:/etc/certctl/tls:ro
+    networks:
+      - certctl-network
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f certctl-agent || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  # Windows IIS Target
+  windows-iis-test:
+    image: mcr.microsoft.com/windows/servercore/iis:windowsservercore-ltsc2022@sha256:8d0b0e651ad514e3fb05978db66f38036118812e1b9314a48f10419cad8a3462
+    container_name: certctl-iis-test
+    ports:
+      - "20448:443"
+    networks:
+      - certctl-network
+    profiles: [windows-only]
+
+  # Certctl Agent (IIS Test)
+  agent-04-iis:
+    build:
+      context: ..
+      dockerfile: Dockerfile.agent
+    container_name: agent-04-iis
+    depends_on:
+      certctl-server:
+        condition: service_healthy
+    environment:
+      CERTCTL_SERVER_URL: https://certctl-server:8443
+      CERTCTL_SERVER_CA_BUNDLE_PATH: /etc/certctl/tls/ca.crt
+      CERTCTL_API_KEY: agent-secret-2026
+      CERTCTL_AGENT_NAME: agent-04-iis
+      CERTCTL_AGENT_ID: agent-test-iis
+      CERTCTL_KEYGEN_MODE: agent
+      CERTCTL_LOG_LEVEL: debug
+    volumes:
+      - agent_04_iis_keys:/var/lib/certctl/keys
+      - certs:/etc/certctl/tls:ro
+    networks:
+      - certctl-network
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f certctl-agent || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    profiles: [windows-only]
+
 networks:
   certctl-network:
     driver: bridge
@@ -329,7 +457,15 @@ networks:
 volumes:
   postgres_data:
     driver: local
-  agent_keys:
+  agent_01_nginx_keys:
+    driver: local
+  agent_test_nginx_certs:
+    driver: local
+  agent_02_f5_keys:
+    driver: local
+  agent_03_k8s_keys:
+    driver: local
+  agent_04_iis_keys:
     driver: local
   certs:
     driver: local

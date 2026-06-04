@@ -103,3 +103,6 @@ deploy/test/f5-mock-icontrol/f5-mock-icontrol
 # docs/history-normalization.md for the public-facing description of
 # the Phase 0 git-history rewrite.
 cowork/
+
+certctl-deploy.zip
+server_logs.txt

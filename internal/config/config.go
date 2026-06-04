@@ -608,12 +608,7 @@ func Load() (*Config, error) {
 			PagerDutySeverity:   getEnv("CERTCTL_PAGERDUTY_SEVERITY", "warning"),
 			OpsGenieAPIKey:      getEnv("CERTCTL_OPSGENIE_API_KEY", ""),
 			OpsGeniePriority:    getEnv("CERTCTL_OPSGENIE_PRIORITY", "P3"),
-			SMTPHost:            getEnv("CERTCTL_SMTP_HOST", ""),
-			SMTPPort:            getEnvInt("CERTCTL_SMTP_PORT", 587),
-			SMTPUsername:        getEnv("CERTCTL_SMTP_USERNAME", ""),
-			SMTPPassword:        getEnv("CERTCTL_SMTP_PASSWORD", ""),
-			SMTPFromAddress:     getEnv("CERTCTL_SMTP_FROM_ADDRESS", ""),
-			SMTPUseTLS:          getEnvBool("CERTCTL_SMTP_USE_TLS", true),
+
 			// Acquisition-audit DOC-001 closure (Sprint 7 ACQ, 2026-05-16).
 			// Wire the previously-orphan webhook notifier
 			// (internal/connector/notifier/webhook/) into the boot

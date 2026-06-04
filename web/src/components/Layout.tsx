@@ -210,10 +210,10 @@ export default function Layout() {
         {/* Logo — large and prominent */}
         <div className="px-4 pt-5 pb-4 flex flex-col items-center gap-2">
           <div className="bg-white rounded-xl p-2 shadow-lg">
-            <img src={logo} alt="certctl" className="h-16 w-16" width={64} height={64} loading="eager" decoding="async" />
+            <img src={logo} alt="TTDL" className="h-16 w-16" width={64} height={64} loading="eager" decoding="async" />
           </div>
           <div className="text-center">
-            <h1 className="text-lg font-bold text-white tracking-tight">certctl</h1>
+            <h1 className="text-lg font-bold text-white tracking-tight">TTDL</h1>
             <p className="text-2xs text-brand-300 uppercase tracking-[0.2em]">Control Plane</p>
           </div>
         </div>
@@ -298,14 +298,7 @@ export default function Layout() {
               • Logout sits flush-right on the same row, separated
                 visually by justify-between flex layout. Only renders
                 when authRequired is true. */}
-        <div className="px-5 pt-3 pb-3 border-t border-white/10 flex items-center justify-between gap-3">
-          <ExternalLink
-            href="https://www.linkedin.com/in/shankar-k-a1b6853ba"
-            className="text-2xs text-sidebar-text/80 hover:text-white font-mono underline-offset-2 hover:underline transition-colors"
-            title="Shankar on LinkedIn — mở trong tab mới"
-          >
-            Được xây dựng và duy trì bởi Shankar
-          </ExternalLink>
+        <div className="px-5 pt-3 pb-3 border-t border-white/10 flex items-center justify-end gap-3">
           {authRequired && (
             <button
               onClick={logout}

@@ -14,7 +14,6 @@ import (
 	"github.com/zulufun/certctl-localhost/internal/connector/issuer"
 	"github.com/zulufun/certctl-localhost/internal/connector/issuer/acme"
 	"github.com/zulufun/certctl-localhost/internal/connector/issuer/local"
-	"github.com/zulufun/certctl-localhost/internal/connector/issuer/vault"
 	"github.com/zulufun/certctl-localhost/internal/connector/issuerfactory"
 	"github.com/zulufun/certctl-localhost/internal/crypto"
 	"github.com/zulufun/certctl-localhost/internal/crypto/signer"
@@ -53,13 +52,6 @@ type IssuerRegistry struct {
 	// CertificateLookup wiring" error in place for old wiring paths.
 	acmeCertLookup acme.CertificateLookupRepo
 
-	// vaultRenewalMetrics — when set, every freshly-constructed
-	// *vault.Connector is wired with SetRenewalRecorder so the
-	// renew-self loop bumps the certctl_vault_token_renewals_total
-	// counter. Closes Top-10 fix #5 of the 2026-05-03 audit. Nil
-	// leaves the no-op recorder in place (no metric emission, but
-	// the loop still runs).
-	vaultRenewalMetrics *VaultRenewalMetrics
 }
 
 // LocalIssuerDeps groups the optional dependencies that the local
@@ -105,22 +97,7 @@ func (r *IssuerRegistry) SetIssuanceMetrics(m *IssuanceMetrics) {
 	r.metrics = m
 }
 
-// SetVaultRenewalMetrics wires the per-(result) counter table for
-// the Vault PKI renew-self loop. Every *vault.Connector constructed
-// by Rebuild after this call records its renewal results into the
-// supplied metrics. Closes Top-10 fix #5 of the 2026-05-03
-// issuer-coverage audit.
-//
-// The same instance must also be registered with the metrics
-// handler via MetricsHandler.SetVaultRenewals so the Prometheus
-// exposer emits certctl_vault_token_renewals_total{result=...}.
-// cmd/server/main.go owns both wiring sides; tests usually skip
-// the Prometheus side and just assert against the snapshot.
-func (r *IssuerRegistry) SetVaultRenewalMetrics(m *VaultRenewalMetrics) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.vaultRenewalMetrics = m
-}
+
 
 // SetACMECertLookup wires the cert-version lookup repo for every
 // *acme.Connector constructed by Rebuild. The lookup is used by the
@@ -258,18 +235,7 @@ func (r *IssuerRegistry) Rebuild(ctx context.Context, configs []*domain.Issuer, 
 				"id", cfg.ID)
 		}
 
-		// Top-10 fix #5 (2026-05-03 audit): wire the renew-self
-		// metric recorder into every freshly-constructed
-		// *vault.Connector so its background renewal loop bumps the
-		// certctl_vault_token_renewals_total counter. Lifecycle
-		// startup itself is gated by StartLifecycles below — Rebuild
-		// only does the metric wire here so the recorder is in place
-		// when StartLifecycles fires.
-		if vaultConn, ok := connector.(*vault.Connector); ok && r.vaultRenewalMetrics != nil {
-			vaultConn.SetRenewalRecorder(r.vaultRenewalMetrics)
-			r.logger.Info("Vault PKI issuer wired with renew-self metric recorder",
-				"id", cfg.ID)
-		}
+
 
 		adapter := NewIssuerConnectorAdapter(connector)
 		// Wire per-issuer-type metrics (audit fix #4) when SetIssuanceMetrics

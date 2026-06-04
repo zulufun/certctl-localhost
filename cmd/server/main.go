@@ -30,7 +30,6 @@ import (
 	"github.com/zulufun/certctl-localhost/internal/auth/session"
 	"github.com/zulufun/certctl-localhost/internal/config"
 	"github.com/zulufun/certctl-localhost/internal/connector/issuer/asyncpoll"
-	notifyemail "github.com/zulufun/certctl-localhost/internal/connector/notifier/email"
 	notifywebhook "github.com/zulufun/certctl-localhost/internal/connector/notifier/webhook"
 	"github.com/zulufun/certctl-localhost/internal/crypto/signer"
 	"github.com/zulufun/certctl-localhost/internal/domain"
@@ -305,16 +304,6 @@ func main() {
 	// certctl_issuance_total / _duration_seconds / _failures_total).
 	issuanceMetrics := service.NewIssuanceMetrics(service.DefaultIssuanceBucketBoundaries)
 	issuerRegistry.SetIssuanceMetrics(issuanceMetrics)
-
-	// Top-10 fix #5 (2026-05-03 audit): Vault PKI token-renewal
-	// metrics. Same instance is wired into the registry (so each
-	// *vault.Connector built by Rebuild gets a recorder) AND into
-	// the metrics handler (so the Prometheus exposer emits
-	// certctl_vault_token_renewals_total). The renewal goroutine
-	// itself is kicked off below by issuerRegistry.StartLifecycles
-	// after Rebuild has populated the registry.
-	vaultRenewalMetrics := service.NewVaultRenewalMetrics()
-	issuerRegistry.SetVaultRenewalMetrics(vaultRenewalMetrics)
 
 	// Audit fix #7: wire the cert-version lookup so ACME connectors
 	// built by Rebuild can recover the leaf-cert DER from a serial-
@@ -728,24 +717,6 @@ func main() {
 		logger.Info("Webhook notifier enabled", "signing", signedHint)
 	}
 
-	// Wire email notifier if SMTP is configured
-	var emailAdapter *notifyemail.NotifierAdapter
-	if cfg.Notifiers.SMTPHost != "" && cfg.Notifiers.SMTPFromAddress != "" {
-		emailConnector := notifyemail.New(&notifyemail.Config{
-			SMTPHost:    cfg.Notifiers.SMTPHost,
-			SMTPPort:    cfg.Notifiers.SMTPPort,
-			Username:    cfg.Notifiers.SMTPUsername,
-			Password:    cfg.Notifiers.SMTPPassword,
-			FromAddress: cfg.Notifiers.SMTPFromAddress,
-			UseTLS:      cfg.Notifiers.SMTPUseTLS,
-		}, logger)
-		emailAdapter = notifyemail.NewNotifierAdapter(emailConnector)
-		notifierRegistry["Email"] = emailAdapter
-		logger.Info("Email notifier enabled",
-			"smtp_host", cfg.Notifiers.SMTPHost,
-			"smtp_port", cfg.Notifiers.SMTPPort,
-			"from", cfg.Notifiers.SMTPFromAddress)
-	}
 
 	notificationService := service.NewNotificationService(notificationRepo, notifierRegistry)
 	notificationService.SetOwnerRepo(ownerRepo)
@@ -1009,9 +980,7 @@ func main() {
 	// Audit fix #4: wire the per-issuer-type issuance metrics so the
 	// /api/v1/metrics/prometheus exposer emits the new series.
 	metricsHandler.SetIssuanceCounters(issuanceMetrics)
-	// Top-10 fix #5 (2026-05-03 audit): Vault PKI token-renewal counter.
-	// Same instance the registry uses to record per-tick results.
-	metricsHandler.SetVaultRenewals(vaultRenewalMetrics)
+
 	// Rank 4 of the 2026-05-03 Infisical deep-research deliverable:
 	// per-policy multi-channel expiry-alert counter. Same instance the
 	// notification service uses to record per-(channel, threshold,
@@ -1063,24 +1032,7 @@ func main() {
 	bulkRenewalHandler := handler.NewBulkRenewalHandler(bulkRenewalService)
 	bulkReassignmentHandler := handler.NewBulkReassignmentHandler(bulkReassignmentService)
 
-	// Initialize digest service (requires email notifier)
-	var digestService *service.DigestService
-	var digestHandler *handler.DigestHandler
-	if cfg.Digest.Enabled && emailAdapter != nil {
-		digestService = service.NewDigestService(
-			statsService, certificateRepo, ownerRepo, emailAdapter, cfg.Digest.Recipients, logger,
-		)
-		digestHandler = handler.NewDigestHandler(digestService)
-		logger.Info("digest service enabled",
-			"interval", cfg.Digest.Interval.String(),
-			"recipients", len(cfg.Digest.Recipients))
-	} else {
-		// Create a no-op digest handler for route registration
-		digestHandler = handler.NewDigestHandler(nil)
-		if cfg.Digest.Enabled && emailAdapter == nil {
-			logger.Warn("digest enabled but SMTP not configured — digest emails will not be sent")
-		}
-	}
+
 
 	// Initialize health check service (M48)
 	var healthCheckService *service.HealthCheckService
@@ -1165,11 +1117,7 @@ func main() {
 		sched.SetNetworkScanInterval(cfg.NetworkScan.ScanInterval)
 		logger.Info("network scanning enabled", "interval", cfg.NetworkScan.ScanInterval.String())
 	}
-	if digestService != nil {
-		sched.SetDigestService(digestService)
-		sched.SetDigestInterval(cfg.Digest.Interval)
-		logger.Info("digest scheduler enabled", "interval", cfg.Digest.Interval.String())
-	}
+
 	if healthCheckService != nil {
 		sched.SetHealthCheckService(healthCheckService)
 		sched.SetHealthCheckInterval(cfg.HealthCheck.CheckInterval)
@@ -1360,7 +1308,6 @@ func main() {
 		NetworkScan:      networkScanHandler,
 		Verification:     verificationHandler,
 		Export:           exportHandler,
-		Digest:           *digestHandler,
 		HealthChecks:     healthCheckHandler,
 		BulkRevocation:   bulkRevocationHandler,
 		BulkRenewal:      bulkRenewalHandler,

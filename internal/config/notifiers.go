@@ -56,33 +56,6 @@ type NotifierConfig struct {
 	// Valid values: "P1", "P2", "P3", "P4", "P5". Default: "P3".
 	OpsGeniePriority string
 
-	// SMTPHost is the SMTP server hostname for sending email notifications.
-	// Example: "smtp.gmail.com", "smtp.sendgrid.net". Required for email notifications.
-	// Setting: CERTCTL_SMTP_HOST environment variable.
-	SMTPHost string
-
-	// SMTPPort is the SMTP server port. Default: 587 (STARTTLS).
-	// Common values: 25 (plain), 465 (implicit TLS), 587 (STARTTLS).
-	// Setting: CERTCTL_SMTP_PORT environment variable.
-	SMTPPort int
-
-	// SMTPUsername is the SMTP authentication username.
-	// Setting: CERTCTL_SMTP_USERNAME environment variable.
-	SMTPUsername string
-
-	// SMTPPassword is the SMTP authentication password or app-specific password.
-	// Setting: CERTCTL_SMTP_PASSWORD environment variable.
-	SMTPPassword string
-
-	// SMTPFromAddress is the sender email address for outbound notifications.
-	// Example: "certctl@example.com", "noreply@company.com".
-	// Setting: CERTCTL_SMTP_FROM_ADDRESS environment variable.
-	SMTPFromAddress string
-
-	// SMTPUseTLS enables TLS for the SMTP connection.
-	// Default: true. Set to false for plain SMTP (not recommended).
-	// Setting: CERTCTL_SMTP_USE_TLS environment variable.
-	SMTPUseTLS bool
 
 	// WebhookURL is the HTTP(S) endpoint for the generic webhook
 	// notifier. Acquisition-audit DOC-001 closure (Sprint 7 ACQ,

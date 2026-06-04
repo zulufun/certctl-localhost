@@ -6,6 +6,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"github.com/zulufun/certctl-localhost/internal/repository"
 	"time"
@@ -76,7 +77,7 @@ func (r *AgentRepository) Get(ctx context.Context, id string) (*domain.Agent, er
 
 	agent, err := scanAgent(row)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("agent not found: %w", repository.ErrNotFound)
 		}
 		return nil, fmt.Errorf("failed to query agent: %w", err)
@@ -262,7 +263,7 @@ func (r *AgentRepository) GetByAPIKey(ctx context.Context, keyHash string) (*dom
 
 	agent, err := scanAgent(row)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("agent not found: %w", repository.ErrNotFound)
 		}
 		return nil, fmt.Errorf("failed to query agent: %w", err)

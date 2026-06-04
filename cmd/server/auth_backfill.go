@@ -92,6 +92,9 @@ func backfillNamedKeyActorRoles(
 		if nk.Admin {
 			role = authdomain.RoleIDAdmin
 		}
+		if nk.Name == "agent-key" || strings.HasPrefix(nk.Name, "agent-") {
+			role = "r-agent"
+		}
 		if err := repo.Grant(ctx, &authdomain.ActorRole{
 			ActorID:   nk.Name,
 			ActorType: authdomain.ActorTypeValue(domain.ActorTypeAPIKey),

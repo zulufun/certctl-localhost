@@ -210,7 +210,6 @@ type HandlerRegistry struct {
 	NetworkScan    handler.NetworkScanHandler
 	Verification   handler.VerificationHandler
 	Export         handler.ExportHandler
-	Digest         handler.DigestHandler
 	HealthChecks   *handler.HealthCheckHandler
 	BulkRevocation handler.BulkRevocationHandler
 
@@ -825,9 +824,7 @@ func (r *Router) RegisterHandlers(reg HandlerRegistry) {
 	r.Register("POST /api/v1/jobs/{id}/verify", rbacGate(reg.Checker, "verification.run", reg.Verification.VerifyDeployment))
 	r.Register("GET /api/v1/jobs/{id}/verification", rbacGate(reg.Checker, "verification.read", reg.Verification.GetVerificationStatus))
 
-	// Digest routes: /api/v1/digest
-	r.Register("GET /api/v1/digest/preview", rbacGate(reg.Checker, "digest.read", reg.Digest.PreviewDigest))
-	r.Register("POST /api/v1/digest/send", rbacGate(reg.Checker, "digest.send", reg.Digest.SendDigest))
+
 
 	// Health check routes: /api/v1/health-checks
 	// Summary endpoint must be registered before {id} routes

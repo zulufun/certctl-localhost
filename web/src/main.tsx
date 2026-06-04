@@ -146,9 +146,9 @@ createRoot(document.getElementById('root')!).render(
       <DesktopOnlyBanner />
       <QueryClientProvider client={queryClient}>
         <Toaster />
-        <AuthProvider>
-          <AuthGate>
-            <BrowserRouter>
+        <BrowserRouter>
+          <AuthProvider>
+            <AuthGate>
               <CommandPaletteHost />
               <Routes>
                 <Route element={<Layout />}>
@@ -224,10 +224,11 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="auth/users"                        element={lazyRoute(<UsersPage />)} />
                 </Route>
               </Routes>
-            </BrowserRouter>
-          </AuthGate>
-        </AuthProvider>
+            </AuthGate>
+          </AuthProvider>
+        </BrowserRouter>
       </QueryClientProvider>
     </ErrorBoundary>
   </StrictMode>
 );
+
