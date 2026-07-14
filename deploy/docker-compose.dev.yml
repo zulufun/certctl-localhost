@@ -32,7 +32,7 @@ services:
       # - ../api:/app/api
     ports:
       - "8443:8443"
-      - "40000:40000"  # Delve debugger port (if debugging)
+      - "40000:40000" # Delve debugger port (if debugging)
 
   # Override agent configuration for development
   certctl-agent:
@@ -67,11 +67,3 @@ services:
     depends_on:
       - postgres
     restart: unless-stopped
-
-# Notes for development:
-# 1. Enable hot reload by installing air: go install github.com/cosmtrek/air@latest
-#    Then in cmd/server and cmd/agent, create .air.toml for watch configuration
-# 2. Debug the server by attaching Delve to port 40000
-# 3. Access PgAdmin at http://localhost:5050 to browse the database
-# 4. View server logs: docker-compose logs -f certctl-server
-# 5. View agent logs: docker-compose logs -f certctl-agent
