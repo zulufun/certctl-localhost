@@ -37,6 +37,7 @@ type User struct {
 	DisplayName         string    `json:"display_name"`
 	OIDCSubject         string    `json:"oidc_subject"`
 	OIDCProviderID      string    `json:"oidc_provider_id"`
+	PasswordHash        string    `json:"-"` // Not serialized to JSON
 	LastLoginAt         time.Time `json:"last_login_at"`
 	WebAuthnCredentials []byte    `json:"webauthn_credentials,omitempty"` // JSONB; reserved for v3, always `[]` in Bundle 2
 	CreatedAt           time.Time `json:"created_at"`
@@ -75,12 +76,18 @@ func (u *User) Validate() error {
 	if !isPlausibleEmail(u.Email) {
 		return ErrUserInvalidEmail
 	}
-	if strings.TrimSpace(u.OIDCSubject) == "" {
-		return ErrUserEmptyOIDCSubject
+	// For OIDC SSO users, both OIDC fields must be present.
+	// For local users, both OIDC fields must be empty.
+	hasOIDC := strings.TrimSpace(u.OIDCSubject) != "" || strings.TrimSpace(u.OIDCProviderID) != ""
+	if hasOIDC {
+		if strings.TrimSpace(u.OIDCSubject) == "" {
+			return ErrUserEmptyOIDCSubject
+		}
+		if !strings.HasPrefix(u.OIDCProviderID, "op-") {
+			return ErrUserInvalidProviderID
+		}
 	}
-	if !strings.HasPrefix(u.OIDCProviderID, "op-") {
-		return ErrUserInvalidProviderID
-	}
+	
 	// WebAuthnCredentials default to empty array (`[]`) at the SQL layer
 	// via DEFAULT '[]'. Bundle 2 doesn't populate; v3 does.
 	if u.WebAuthnCredentials == nil {

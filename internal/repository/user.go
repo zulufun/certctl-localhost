@@ -30,6 +30,9 @@ type UserRepository interface {
 	// Get returns one user by id. ErrUserNotFound on miss.
 	Get(ctx context.Context, id string) (*userdomain.User, error)
 
+	// GetByEmail looks up a user by email address (for local auth).
+	GetByEmail(ctx context.Context, tenantID, email string) (*userdomain.User, error)
+
 	// GetByOIDCSubject is the Phase 3 hot-path lookup at login time.
 	// Returns the existing row if present, ErrUserNotFound otherwise.
 	GetByOIDCSubject(ctx context.Context, providerID, subject string) (*userdomain.User, error)

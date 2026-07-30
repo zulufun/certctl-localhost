@@ -86,7 +86,7 @@ ON CONFLICT (id) DO NOTHING;
 -- request); production deploys override both env vars + use the
 -- regular registration flow.
 INSERT INTO agents (id, name, hostname, status, last_heartbeat_at, registered_at, api_key_hash, os, architecture, ip_address, version) VALUES
-  ('agent-demo-1', 'docker-agent', 'certctl-agent', 'Online', NOW(), NOW(), 'demo_no_auth', 'linux', 'amd64', '127.0.0.1', '2.1.0')
+  ('agent-demo-1', 'agent-01-nginx', 'agent-01-nginx', 'Online', NOW(), NOW(), 'demo_no_auth', 'linux', 'amd64', '127.0.0.1', '2.1.0')
 ON CONFLICT (id) DO NOTHING;
 
 -- Sentinel agents for cloud discovery sources (M50)

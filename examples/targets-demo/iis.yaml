@@ -1,0 +1,9 @@
+# IIS Deployment Target Example
+name: IIS Web Server
+type: IIS
+description: Example IIS target configured with certctl
+properties:
+  site_name: Default Web Site
+  binding_ip: "*"
+  binding_port: "443"
+  binding_hostname: "example.com"

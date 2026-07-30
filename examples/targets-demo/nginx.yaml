@@ -1,0 +1,9 @@
+# NGINX Deployment Target Example
+name: NGINX Web Server
+type: Nginx
+description: Example NGINX target configured with certctl
+properties:
+  install_path: /etc/nginx/ssl
+  restart_command: systemctl reload nginx
+  cert_file: /etc/nginx/ssl/cert.pem
+  key_file: /etc/nginx/ssl/key.pem

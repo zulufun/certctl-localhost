@@ -518,6 +518,14 @@ func buildFinalHandler(apiHandler, noAuthHandler http.Handler, webDir string, da
 			return
 		}
 
+		// Pre-auth session routes: OIDC flow, local login, breakglass, logout.
+		// These must bypass the Bearer-auth middleware chain. The handlers
+		// themselves enforce their own authentication contract.
+		if strings.HasPrefix(path, "/auth/") {
+			noAuthHandler.ServeHTTP(w, r)
+			return
+		}
+
 		// RFC 5280 CRL and RFC 6960 OCSP live under /.well-known/pki/ and MUST
 		// be served unauthenticated — relying parties (browsers, OpenSSL, OCSP
 		// stapling sidecars, mTLS clients) cannot present certctl Bearer tokens.

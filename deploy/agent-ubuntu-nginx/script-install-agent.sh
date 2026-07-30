@@ -126,7 +126,7 @@ check_root() {
 do_uninstall() {
     echo -e "${YELLOW}Đang gỡ cài đặt certctl-agent...${NC}"
 
-    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+    if if command -v systemctl >/dev/null && systemctl is-system-running >/dev/null 2>&1; then systemctl is-active --quiet "$SERVICE_NAME"; else pgrep -f certctl-agent >/dev/null; fi 2>/dev/null; then
         echo "  Dừng service..."
         systemctl stop "$SERVICE_NAME"
     fi
@@ -139,7 +139,7 @@ do_uninstall() {
     local svc_file="/etc/systemd/system/${SERVICE_NAME}.service"
     if [[ -f "$svc_file" ]]; then
         rm -f "$svc_file"
-        systemctl daemon-reload
+        if command -v systemctl >/dev/null; then systemctl daemon-reload; else echo "Not using systemd"; fi
         echo -e "${GREEN}  [OK] Xóa service file${NC}"
     fi
 
@@ -171,16 +171,75 @@ check_binary() {
     echo "$src"
 }
 
+DEFAULT_SERVER_URL=""
+DEFAULT_API_KEY=""
+DEFAULT_AGENT_NAME=""
+DEFAULT_AGENT_ID=""
+DEFAULT_CA_BUNDLE_PATH=""
+DEFAULT_DISCOVERY_DIRS=""
+
+# ─── Load env defaults ────────────────────────────────────────────────────────
+load_env_defaults() {
+    local env_file=""
+    if [[ -f "$SCRIPT_DIR/agent.env" ]]; then
+        env_file="$SCRIPT_DIR/agent.env"
+    elif [[ -f "$CONFIG_DIR/agent.env" ]]; then
+        env_file="$CONFIG_DIR/agent.env"
+    elif [[ -f "$SCRIPT_DIR/agent.env.example" ]]; then
+        env_file="$SCRIPT_DIR/agent.env.example"
+    fi
+
+    if [[ -n "$env_file" && -f "$env_file" ]]; then
+        echo -e "  ${CYAN}[Tự động] Đọc giá trị mặc định từ '$env_file'${NC}"
+        local line=""
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            line="$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            [[ -z "$line" || "$line" =~ ^# ]] && continue
+            
+            if [[ "$line" =~ ^([A-Za-z0-9_]+)=(.*)$ ]]; then
+                local var_name="${BASH_REMATCH[1]}"
+                local var_val="${BASH_REMATCH[2]}"
+                var_val="${var_val%\"}"
+                var_val="${var_val#\"}"
+                var_val="${var_val%\'}"
+                var_val="${var_val#\'}"
+
+                case "$var_name" in
+                    CERTCTL_SERVER_URL)            DEFAULT_SERVER_URL="$var_val" ;;
+                    CERTCTL_API_KEY)               DEFAULT_API_KEY="$var_val" ;;
+                    CERTCTL_AGENT_NAME)            DEFAULT_AGENT_NAME="$var_val" ;;
+                    CERTCTL_AGENT_ID)              DEFAULT_AGENT_ID="$var_val" ;;
+                    CERTCTL_SERVER_CA_BUNDLE_PATH) DEFAULT_CA_BUNDLE_PATH="$var_val" ;;
+                    CERTCTL_DISCOVERY_DIRS)        DEFAULT_DISCOVERY_DIRS="$var_val" ;;
+                esac
+            fi
+        done < "$env_file"
+    fi
+}
+
 # ─── Interactive prompts ───────────────────────────────────────────────────────
 prompt_config() {
     echo ""
     echo -e "${YELLOW}=== Cấu hình kết nối certctl Server ===${NC}"
     echo ""
 
+    load_env_defaults
+
     # Server URL
     if [[ -z "$SERVER_URL" ]]; then
-        echo -n -e "  ${CYAN}Nhập certctl Server URL (ví dụ: https://192.168.1.100:8443):${NC} "
-        read -r SERVER_URL
+        local default_url="${DEFAULT_SERVER_URL:-}"
+        local prompt_msg="  ${CYAN}Nhập certctl Server URL"
+        if [[ -n "$default_url" ]]; then
+            prompt_msg+=" (Enter để dùng: '$default_url')"
+        else
+            prompt_msg+=" (ví dụ: https://192.168.1.100:8443)"
+        fi
+        prompt_msg+=":${NC} "
+
+        echo -n -e "$prompt_msg"
+        read -r input
+        SERVER_URL="${input:-$default_url}"
+
         if [[ -z "$SERVER_URL" ]]; then
             echo -e "${RED}LỖI: Server URL không được để trống!${NC}" >&2
             exit 1
@@ -189,9 +248,18 @@ prompt_config() {
 
     # API Key
     if [[ -z "$API_KEY" ]]; then
-        echo -n -e "  ${CYAN}Nhập API Key:${NC} "
-        read -rs API_KEY
+        local default_key="${DEFAULT_API_KEY:-}"
+        local prompt_msg="  ${CYAN}Nhập API Key"
+        if [[ -n "$default_key" ]]; then
+            prompt_msg+=" (Enter để dùng giá trị từ agent.env)"
+        fi
+        prompt_msg+=":${NC} "
+
+        echo -n -e "$prompt_msg"
+        read -rs input
         echo ""
+        API_KEY="${input:-$default_key}"
+
         if [[ -z "$API_KEY" ]]; then
             echo -e "${RED}LỖI: API Key không được để trống!${NC}" >&2
             exit 1
@@ -200,8 +268,7 @@ prompt_config() {
 
     # Agent Name
     if [[ -z "$AGENT_NAME" ]]; then
-        local default_name
-        default_name="$(hostname -s)"
+        local default_name="${DEFAULT_AGENT_NAME:-$(hostname -s)}"
         echo -n -e "  ${CYAN}Tên Agent (Enter để dùng mặc định '$default_name'):${NC} "
         read -r input
         AGENT_NAME="${input:-$default_name}"
@@ -209,8 +276,7 @@ prompt_config() {
 
     # Agent ID
     if [[ -z "$AGENT_ID" ]]; then
-        local default_id
-        default_id="$(hostname -s)"
+        local default_id="${DEFAULT_AGENT_ID:-$(hostname -s)}"
         echo -n -e "  ${CYAN}Agent ID (Enter để dùng mặc định '$default_id'):${NC} "
         read -r input
         AGENT_ID="${input:-$default_id}"
@@ -219,14 +285,27 @@ prompt_config() {
     # CA Bundle - auto-detect nếu có trong folder
     if [[ -z "$CA_BUNDLE_PATH" ]]; then
         local auto_ca="$SCRIPT_DIR/server-ca.crt"
+        local default_ca="${DEFAULT_CA_BUNDLE_PATH:-}"
         if [[ -f "$auto_ca" ]]; then
             echo -e "  ${GREEN}[Tự động] Tìm thấy server-ca.crt trong bộ cài, sẽ sử dụng file này.${NC}"
             CA_BUNDLE_PATH="$auto_ca"
+        elif [[ -n "$default_ca" && -f "$default_ca" ]]; then
+            echo -n -e "  ${CYAN}Đường dẫn CA bundle (Enter để dùng mặc định '$default_ca'):${NC} "
+            read -r input
+            CA_BUNDLE_PATH="${input:-$default_ca}"
         else
             echo -n -e "  ${CYAN}Đường dẫn CA bundle (Enter bỏ qua - chỉ cần khi server dùng self-signed cert):${NC} "
             read -r input
             CA_BUNDLE_PATH="${input:-}"
         fi
+    fi
+
+    # Discovery Dirs
+    if [[ -z "$DISCOVERY_DIRS" ]]; then
+        local default_dirs="${DEFAULT_DISCOVERY_DIRS:-/etc/nginx/certs,/etc/ssl/certs,/etc/letsencrypt/live}"
+        echo -n -e "  ${CYAN}Thư mục scan certificates (Enter để dùng mặc định '$default_dirs'):${NC} "
+        read -r input
+        DISCOVERY_DIRS="${input:-$default_dirs}"
     fi
 }
 
@@ -260,7 +339,7 @@ install_ca_cert() {
         cp "$CA_BUNDLE_PATH" "$CONFIG_DIR/server-ca.crt"
         chmod 644 "$CONFIG_DIR/server-ca.crt"
         resolved_ca="$CONFIG_DIR/server-ca.crt"
-        echo -e "${GREEN}  [OK] CA certificate: $resolved_ca${NC}"
+        echo -e "${GREEN}  [OK] CA certificate: $resolved_ca${NC}" >&2
     fi
     echo "$resolved_ca"
 }
@@ -354,7 +433,7 @@ WantedBy=multi-user.target
 EOF
 
     chmod 644 "/etc/systemd/system/${SERVICE_NAME}.service"
-    systemctl daemon-reload
+    if command -v systemctl >/dev/null; then systemctl daemon-reload; else echo "Not using systemd"; fi
     echo -e "${GREEN}  [OK] /etc/systemd/system/${SERVICE_NAME}.service${NC}"
 }
 
@@ -366,11 +445,11 @@ start_service() {
     fi
 
     echo -e "${YELLOW}Kích hoạt và khởi động certctl-agent...${NC}"
-    systemctl enable "$SERVICE_NAME"
-    systemctl start "$SERVICE_NAME"
+    if command -v systemctl >/dev/null; then systemctl enable "$SERVICE_NAME"; fi
+    if command -v systemctl >/dev/null && systemctl is-system-running >/dev/null 2>&1; then systemctl start "$SERVICE_NAME"; else set -a; source /etc/certctl/agent.env; set +a; nohup "$INSTALL_DIR/$BINARY_NAME" > "$LOG_DIR/agent.log" 2>&1 & echo "Started agent in background"; fi
     sleep 3
 
-    if systemctl is-active --quiet "$SERVICE_NAME"; then
+    if if command -v systemctl >/dev/null && systemctl is-system-running >/dev/null 2>&1; then systemctl is-active --quiet "$SERVICE_NAME"; else pgrep -f certctl-agent >/dev/null; fi; then
         echo -e "${GREEN}  [OK] Service đang chạy!${NC}"
     else
         echo -e "${RED}  [WARN] Service chưa chạy. Kiểm tra:${NC}"

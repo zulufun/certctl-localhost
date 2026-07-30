@@ -1,0 +1,19 @@
+version: "3"
+services:
+  dns-server:
+    container_name: technitium-dns
+    hostname: dns-server
+    image: technitium/dns-server:latest
+    ports:
+      - "5380:5380/tcp" # DNS web console (HTTP)
+      - "10.1.0.12:53:53/udp"     # DNS service
+      - "10.1.0.12:53:53/tcp"     # DNS service
+    environment:
+      - DNS_SERVER_DOMAIN=dns-server
+      - DNS_SERVER_ADMIN_PASSWORD=admin
+    volumes:
+      - config:/etc/dns
+    restart: unless-stopped
+
+volumes:
+    config:

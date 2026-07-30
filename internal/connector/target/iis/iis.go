@@ -387,7 +387,8 @@ func (c *Connector) DeployCertificate(ctx context.Context, request target.Deploy
 		// WinRM mode: base64-encode PFX, decode on remote, import, cleanup
 		pfxBase64 := base64.StdEncoding.EncodeToString(pfxData)
 		importScript = fmt.Sprintf(
-			`$pfxPath = [System.IO.Path]::GetTempFileName() + '.pfx'; `+
+			`$ErrorActionPreference = 'Stop'; `+
+				`$pfxPath = [System.IO.Path]::GetTempFileName() + '.pfx'; `+
 				`[System.IO.File]::WriteAllBytes($pfxPath, [System.Convert]::FromBase64String('%s')); `+
 				`try { `+
 				`$password = ConvertTo-SecureString -String '%s' -AsPlainText -Force; `+
@@ -423,7 +424,8 @@ func (c *Connector) DeployCertificate(ctx context.Context, request target.Deploy
 		tmpFile.Close()
 
 		importScript = fmt.Sprintf(
-			`$password = ConvertTo-SecureString -String '%s' -AsPlainText -Force; `+
+			`$ErrorActionPreference = 'Stop'; `+
+				`$password = ConvertTo-SecureString -String '%s' -AsPlainText -Force; `+
 				`Import-PfxCertificate -FilePath '%s' -CertStoreLocation 'Cert:\LocalMachine\%s' -Password $password`,
 			pfxPassword, pfxPath, c.config.CertStore,
 		)
@@ -462,10 +464,10 @@ func (c *Connector) DeployCertificate(ctx context.Context, request target.Deploy
 	if c.config.SNI {
 		sniFlag = 1
 	}
-
 	bindingScript := fmt.Sprintf(
 		// Remove existing HTTPS binding on this port (if any), then create new one
-		`$existing = Get-WebBinding -Name '%s' -Protocol 'https' -Port %d -ErrorAction SilentlyContinue; `+
+		`$ErrorActionPreference = 'Stop'; `+
+			`$existing = Get-WebBinding -Name '%s' -Protocol 'https' -Port %d -ErrorAction SilentlyContinue; `+
 			`if ($existing) { $existing | Remove-WebBinding }; `+
 			`New-WebBinding -Name '%s' -Protocol 'https' -Port %d -IPAddress '%s' -HostHeader '%s' -SslFlags %d; `+
 			`$binding = Get-WebBinding -Name '%s' -Protocol 'https' -Port %d; `+
@@ -715,6 +717,7 @@ func (c *Connector) snapshotOldBinding(ctx context.Context) (string, error) {
 	// Get-WebBinding.
 	script := fmt.Sprintf(
 		"# CERTCTL_SNAPSHOT\n"+
+			"$ErrorActionPreference = 'Stop'; "+
 			"$existing = Get-WebBinding -Name '%s' -Protocol 'https' -Port %d -ErrorAction SilentlyContinue; "+
 			"if ($existing -and $existing.certificateHash) { Write-Output ('OLD_THUMBPRINT:' + $existing.certificateHash) } "+
 			"else { Write-Output 'NO_OLD_BINDING' }",
@@ -808,6 +811,7 @@ func (c *Connector) verifyRollback(ctx context.Context, oldThumbprint string) er
 	}
 	script := fmt.Sprintf(
 		"# CERTCTL_VERIFY\n"+
+			"$ErrorActionPreference = 'Stop'; "+
 			"$check = Get-WebBinding -Name '%s' -Protocol 'https' -Port %d -ErrorAction SilentlyContinue; "+
 			"if ($check -and $check.certificateHash -eq '%s') { Write-Output 'VERIFY_OK' } "+
 			"elseif ($check) { Write-Output ('VERIFY_FAILED:' + $check.certificateHash) } "+
@@ -840,6 +844,7 @@ func (c *Connector) isCertAlreadyDeployed(ctx context.Context, thumbprint string
 
 	script := fmt.Sprintf(
 		"# CERTCTL_IDEM_PROBE\n"+
+			"$ErrorActionPreference = 'Stop'; "+
 			"$cert = Get-ChildItem 'Cert:\\LocalMachine\\%s\\%s' -ErrorAction SilentlyContinue; "+
 			"$binding = Get-WebBinding -Name '%s' -Protocol 'https' -Port %d -ErrorAction SilentlyContinue; "+
 			"if ($cert -and $binding -and $binding.certificateHash -eq '%s') { Write-Output 'IDEM_MATCH' } else { Write-Output 'IDEM_MISS' }",

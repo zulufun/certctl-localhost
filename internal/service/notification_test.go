@@ -104,7 +104,7 @@ func TestHasThresholdNotification_Found(t *testing.T) {
 		ID:            "notif-1",
 		CertificateID: stringPtr("mc-test-1"),
 		Type:          domain.NotificationTypeExpirationWarning,
-		Channel:       domain.NotificationChannelEmail,
+		Channel:       domain.NotificationChannelWebhook,
 		Recipient:     "owner-1",
 		Message:       "Certificate expires soon\n\n[threshold:30]",
 		Status:        "sent",
@@ -273,7 +273,7 @@ func TestProcessPendingNotifications(t *testing.T) {
 		notif := &domain.NotificationEvent{
 			ID:        fmt.Sprintf("notif-%d", i),
 			Type:      domain.NotificationTypeExpirationWarning,
-			Channel:   domain.NotificationChannelEmail,
+			Channel:   domain.NotificationChannelWebhook,
 			Recipient: "owner-1",
 			Message:   fmt.Sprintf("Test notification %d", i),
 			Status:    "pending",
@@ -314,7 +314,7 @@ func TestProcessPendingNotifications_NoNotifier(t *testing.T) {
 	notif := &domain.NotificationEvent{
 		ID:        "notif-demo",
 		Type:      domain.NotificationTypeExpirationWarning,
-		Channel:   domain.NotificationChannelEmail, // Channel not in registry
+		Channel:   domain.NotificationChannelWebhook, // Channel not in registry
 		Recipient: "owner-1",
 		Message:   "Test notification",
 		Status:    "pending",
@@ -360,7 +360,7 @@ func TestListNotifications(t *testing.T) {
 		notif := &domain.NotificationEvent{
 			ID:        fmt.Sprintf("notif-list-%d", i),
 			Type:      domain.NotificationTypeExpirationWarning,
-			Channel:   domain.NotificationChannelEmail,
+			Channel:   domain.NotificationChannelWebhook,
 			Recipient: fmt.Sprintf("owner-%d", i%2),
 			Message:   fmt.Sprintf("Test notification %d", i),
 			Status:    "sent",
@@ -395,7 +395,7 @@ func TestMarkAsRead(t *testing.T) {
 	notif := &domain.NotificationEvent{
 		ID:        "notif-read",
 		Type:      domain.NotificationTypeExpirationWarning,
-		Channel:   domain.NotificationChannelEmail,
+		Channel:   domain.NotificationChannelWebhook,
 		Recipient: "owner-1",
 		Message:   "Test notification",
 		Status:    "sent",
@@ -425,7 +425,7 @@ func TestGetNotification(t *testing.T) {
 	notif := &domain.NotificationEvent{
 		ID:        "notif-get-test",
 		Type:      domain.NotificationTypeExpirationWarning,
-		Channel:   domain.NotificationChannelEmail,
+		Channel:   domain.NotificationChannelWebhook,
 		Recipient: "owner-1",
 		Message:   "Test notification",
 		Status:    "sent",
@@ -541,7 +541,7 @@ func TestGetNotificationHistory(t *testing.T) {
 			ID:            fmt.Sprintf("notif-hist-%d", i),
 			CertificateID: &certID,
 			Type:          domain.NotificationTypeExpirationWarning,
-			Channel:       domain.NotificationChannelEmail,
+			Channel:       domain.NotificationChannelWebhook,
 			Recipient:     "owner-1",
 			Message:       fmt.Sprintf("Alert %d", i),
 			Status:        "sent",
@@ -617,7 +617,7 @@ func newFailedNotification(id string, retryCount int, nextRetryAt time.Time) *do
 	return &domain.NotificationEvent{
 		ID:          id,
 		Type:        domain.NotificationTypeExpirationWarning,
-		Channel:     domain.NotificationChannelEmail,
+		Channel:     domain.NotificationChannelWebhook,
 		Recipient:   "owner-i005@example.com",
 		Message:     "retry me: " + id,
 		Status:      string(domain.NotificationStatusFailed),
@@ -857,7 +857,7 @@ func TestNotificationService_RequeueNotification_Success(t *testing.T) {
 	dead := &domain.NotificationEvent{
 		ID:          "notif-requeue",
 		Type:        domain.NotificationTypeExpirationWarning,
-		Channel:     domain.NotificationChannelEmail,
+		Channel:     domain.NotificationChannelWebhook,
 		Recipient:   "owner@example.com",
 		Message:     "please requeue me",
 		Status:      string(domain.NotificationStatusDead),
@@ -902,7 +902,7 @@ func TestNotificationService_RequeueNotification_RepoError(t *testing.T) {
 	dead := &domain.NotificationEvent{
 		ID:      "notif-requeue-err",
 		Type:    domain.NotificationTypeExpirationWarning,
-		Channel: domain.NotificationChannelEmail,
+		Channel: domain.NotificationChannelWebhook,
 		Status:  string(domain.NotificationStatusDead),
 	}
 	notifRepo.AddNotification(dead)

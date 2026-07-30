@@ -21,6 +21,9 @@ vi.mock('../../api/client', () => ({
   authListUsers: vi.fn(),
   authDeactivateUser: vi.fn(),
   authReactivateUser: vi.fn(),
+  authCreateUser: vi.fn(),
+  authUpdatePassword: vi.fn(),
+  authMe: vi.fn().mockResolvedValue({ id: 'admin', roles: ['r-admin'], admin: true, effective_permissions: [] }),
 }));
 
 import UsersPage from './UsersPage';

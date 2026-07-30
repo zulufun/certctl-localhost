@@ -415,6 +415,8 @@ func (s *AgentService) RegisterAgent(ctx context.Context, agent domain.Agent) (*
 	now := time.Now()
 	agent.RegisteredAt = now
 	agent.LastHeartbeatAt = &now
+	//add
+	agent.PlaintextAPIKey = apiKey
 
 	if err := s.agentRepo.Create(ctx, &agent); err != nil {
 		return nil, fmt.Errorf("failed to register agent: %w", err)

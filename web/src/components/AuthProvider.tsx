@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import type { ReactNode } from 'react';
-import { getAuthInfo, checkAuth, setApiKey, logout as apiLogout } from '../api/client';
+import { getAuthInfo, checkAuth, localLogin, setApiKey, logout as apiLogout, authMe } from '../api/client';
 
 interface AuthState {
   loading: boolean;
@@ -12,7 +12,7 @@ interface AuthState {
   // callers. These are UX hints — authorization remains enforced server-side.
   user: string;
   admin: boolean;
-  login: (key: string) => Promise<void>;
+  login: (emailOrKey: string, password?: string) => Promise<void>;
   logout: () => void;
   error: string | null;
 }
@@ -45,7 +45,7 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
   // Check if server requires auth on mount
   useEffect(() => {
     getAuthInfo()
-      .then((info) => {
+      .then(async (info) => {
         setAuthType(info.auth_type);
         setAuthRequired(info.required);
         if (!info.required) {
@@ -55,6 +55,17 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
           setAuthenticated(true);
           setUser('');
           setAdmin(false);
+          setLoading(false);
+        } else {
+          try {
+            const me = await authMe();
+            setAuthenticated(true);
+            setUser(me.actor_id ?? '');
+            setAdmin(Boolean(me.admin));
+          } catch {
+            // No active session cookie or invalid API key
+          }
+          setLoading(false);
         }
       })
       .catch(() => {
@@ -62,8 +73,8 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
         setAuthenticated(true);
         setUser('');
         setAdmin(false);
-      })
-      .finally(() => setLoading(false));
+        setLoading(false);
+      });
   }, []);
 
   // Listen for 401 events from the API client.
@@ -116,19 +127,26 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('certctl:auth-required', handler);
   }, []);
 
-  const login = useCallback(async (key: string) => {
+  const login = useCallback(async (emailOrKey: string, password?: string) => {
     setError(null);
     try {
-      // /auth/check returns {status, user, admin}. Capture user + admin so the
-      // GUI can hide admin-only affordances (bulk revoke, etc.).
-      const resp = await checkAuth(key);
-      setApiKey(key);
-      setAuthenticated(true);
-      setUser(resp.user ?? '');
-      setAdmin(Boolean(resp.admin));
+      if (password) {
+        // Local auth
+        const res = await localLogin(emailOrKey, password);
+        setAuthenticated(true);
+        setUser(res.user.id);
+        setAdmin(true); // TODO: check admin role correctly
+      } else {
+        // API key auth fallback
+        const resp = await checkAuth(emailOrKey);
+        setApiKey(emailOrKey);
+        setAuthenticated(true);
+        setUser(resp.user ?? '');
+        setAdmin(Boolean(resp.admin));
+      }
     } catch {
-      setError('Invalid API key');
-      throw new Error('Invalid API key');
+      setError('Đăng nhập thất bại. Vui lòng kiểm tra lại.');
+      throw new Error('Login failed');
     }
   }, []);
 

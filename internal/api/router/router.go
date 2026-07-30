@@ -171,6 +171,7 @@ var AuthExemptRouterRoutes = []string{
 	"POST /auth/oidc/back-channel-logout", // Auth Bundle 2 Phase 5 — IdP-initiated; auth via the IdP-signed logout_token JWT in body
 	"POST /auth/logout",                   // Auth Bundle 2 Phase 5 — caller's session-cookie is checked inside the handler; no Bearer requirement
 	"POST /auth/breakglass/login",         // Auth Bundle 2 Phase 7.5 — local-password recovery; returns 404 when CERTCTL_BREAKGLASS_ENABLED=false (surface invisible)
+	"POST /auth/local/login",              // Local auth flow; pre-auth
 }
 
 // AuthExemptDispatchPrefixes is the documented allowlist of URL prefixes
@@ -353,6 +354,9 @@ type HandlerRegistry struct {
 	// (GET /api/v1/auth/users; DELETE /api/v1/auth/users/{id}).
 	// Optional — when nil the routes are not registered.
 	AuthUsers *handler.AuthUsersHandler
+
+	// AuthLocal handles local login and user creation.
+	AuthLocal *handler.AuthLocalHandler
 
 	// AuthRuntimeConfig handles the MED-12 admin-only runtime
 	// config read endpoint (GET /api/v1/auth/runtime-config).
@@ -549,6 +553,15 @@ func (r *Router) RegisterHandlers(reg HandlerRegistry) {
 				rbacGate(reg.Checker, "auth.user.deactivate", reg.AuthUsers.Deactivate))
 			r.Register("POST /api/v1/auth/users/{id}/reactivate",
 				rbacGate(reg.Checker, "auth.user.deactivate", reg.AuthUsers.Reactivate))
+		}
+
+		if reg.AuthLocal != nil {
+			r.mux.Handle("POST /auth/local/login", middleware.Chain(
+				http.HandlerFunc(reg.AuthLocal.Login),
+				middleware.NewCORS(reg.CorsCfg), middleware.ContentType,
+			))
+			r.Register("POST /api/v1/auth/users", rbacGate(reg.Checker, "auth.user.edit", reg.AuthLocal.CreateUser))
+			r.Register("POST /api/v1/auth/users/{id}/password", rbacGate(reg.Checker, "auth.user.edit", reg.AuthLocal.UpdatePassword))
 		}
 
 		// Audit 2026-05-10 MED-12 — auth runtime config read.

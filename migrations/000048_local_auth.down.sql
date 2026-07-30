@@ -1,0 +1,10 @@
+BEGIN;
+
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_email_key;
+ALTER TABLE users ALTER COLUMN oidc_subject SET NOT NULL;
+ALTER TABLE users ALTER COLUMN oidc_provider_id SET NOT NULL;
+ALTER TABLE users DROP COLUMN IF EXISTS password_hash;
+
+DELETE FROM users WHERE id = 'u-admin';
+
+COMMIT;

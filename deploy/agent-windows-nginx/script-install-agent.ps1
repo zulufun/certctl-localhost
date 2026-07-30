@@ -1,7 +1,7 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    certctl Agent - Bộ cài đặt Offline dành cho Windows IIS
+    certctl Agent - Bộ cài đặt Offline dành cho Windows NGINX
     
 .DESCRIPTION
     Script cài đặt certctl-agent lên Windows dưới dạng Windows Service.
@@ -26,7 +26,7 @@
 
 .PARAMETER DiscoveryDirs
     Các thư mục cần scan để tìm certificates hiện có (phân cách bằng dấu phẩy)
-    Ví dụ: "C:\inetpub\certs,C:\ssl"
+    Ví dụ: "C:\nginx\conf,C:\ssl"
 
 .PARAMETER NoStart
     Cài đặt nhưng không khởi động service
@@ -54,7 +54,8 @@ param(
     [string]$CaBundlePath = "",
     [string]$DiscoveryDirs = "",
     [switch]$NoStart      = $false,
-    [switch]$Uninstall    = $false
+    [switch]$Uninstall    = $false,
+    [switch]$Quiet        = $false
 )
 
 Set-StrictMode -Version Latest
@@ -80,7 +81,7 @@ function Write-Cyan   { param($msg) Write-Host $msg -ForegroundColor Cyan   }
 # ─── Banner ───────────────────────────────────────────────────────────────────
 function Show-Banner {
     Write-Cyan  "=================================================="
-    Write-Cyan  "  certctl Agent Installer - Windows IIS Edition"
+    Write-Cyan  "  certctl Agent Installer - Windows NGINX Edition"
     Write-Cyan  "  Chế độ: OFFLINE (không cần internet)"
     Write-Cyan  "=================================================="
     Write-Host ""
@@ -140,58 +141,146 @@ function Get-Configuration {
     Write-Yellow "=== Cấu hình kết nối certctl Server ==="
     Write-Host ""
 
+    # Tự động nạp cấu hình mặc định từ file agent.env nếu tồn tại
+    $defaultServerURL = ""
+    $defaultApiKey = ""
+    $defaultAgentName = ""
+    $defaultAgentID = ""
+    $defaultDiscoveryDirs = ""
+    $defaultCaBundlePath = ""
+
+    $templateEnv = Join-Path $SCRIPT_DIR "agent.env"
+    if (-not (Test-Path $templateEnv)) {
+        $templateEnv = Join-Path $CONFIG_DIR "agent.env"
+    }
+
+    if (Test-Path $templateEnv) {
+        Write-Cyan "  [Tự động] Đọc giá trị mặc định từ file agent.env..."
+        $envLines = Get-Content $templateEnv
+        foreach ($line in $envLines) {
+            $line = $line.Trim()
+            if ($line -and -not $line.StartsWith("#")) {
+                $idx = $line.IndexOf("=")
+                if ($idx -gt 0) {
+                    $key = $line.Substring(0, $idx).Trim()
+                    $val = $line.Substring($idx + 1).Trim()
+                    switch ($key) {
+                        "CERTCTL_SERVER_URL"            { $defaultServerURL = $val }
+                        "CERTCTL_API_KEY"               { $defaultApiKey = $val }
+                        "CERTCTL_AGENT_NAME"            { $defaultAgentName = $val }
+                        "CERTCTL_AGENT_ID"              { $defaultAgentID = $val }
+                        "CERTCTL_DISCOVERY_DIRS"        { $defaultDiscoveryDirs = $val }
+                        "CERTCTL_SERVER_CA_BUNDLE_PATH" { $defaultCaBundlePath = $val }
+                    }
+                }
+            }
+        }
+    }
+
     # Server URL
     if ([string]::IsNullOrWhiteSpace($script:ServerURL)) {
-        $script:ServerURL = Read-Host "  Nhập certctl Server URL (ví dụ: https://192.168.1.100:8443)"
-        if ([string]::IsNullOrWhiteSpace($script:ServerURL)) {
-            Write-Red "LỖI: Server URL không được để trống!"
-            exit 1
+        if ($Quiet) {
+            if (-not [string]::IsNullOrWhiteSpace($defaultServerURL)) {
+                $script:ServerURL = $defaultServerURL
+            } else {
+                Write-Red "LỖI: Server URL không được để trống trong chế độ Quiet!"
+                exit 1
+            }
+        } else {
+            $promptText = "  Nhập certctl Server URL"
+            if (-not [string]::IsNullOrWhiteSpace($defaultServerURL)) {
+                $promptText += " (Enter để dùng: '$defaultServerURL')"
+            } else {
+                $promptText += " (ví dụ: https://192.168.1.100:8443)"
+            }
+            $inputVal = Read-Host $promptText
+            $script:ServerURL = if ([string]::IsNullOrWhiteSpace($inputVal)) { $defaultServerURL } else { $inputVal.Trim() }
+            if ([string]::IsNullOrWhiteSpace($script:ServerURL)) {
+                Write-Red "LỖI: Server URL không được để trống!"
+                exit 1
+            }
         }
     }
 
     # API Key
     if ([string]::IsNullOrWhiteSpace($script:ApiKey)) {
-        $secureKey = Read-Host "  Nhập API Key" -AsSecureString
-        $script:ApiKey = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
-            [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureKey)
-        )
-        if ([string]::IsNullOrWhiteSpace($script:ApiKey)) {
-            Write-Red "LỖI: API Key không được để trống!"
-            exit 1
+        if ($Quiet) {
+            if (-not [string]::IsNullOrWhiteSpace($defaultApiKey)) {
+                $script:ApiKey = $defaultApiKey
+            } else {
+                Write-Red "LỖI: API Key không được để trống trong chế độ Quiet!"
+                exit 1
+            }
+        } else {
+            $promptText = "  Nhập API Key"
+            if (-not [string]::IsNullOrWhiteSpace($defaultApiKey)) {
+                $promptText += " (Enter để dùng giá trị từ agent.env)"
+            }
+            $secureKey = Read-Host $promptText -AsSecureString
+            $inputVal = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+                [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureKey)
+            )
+            $script:ApiKey = if ([string]::IsNullOrWhiteSpace($inputVal)) { $defaultApiKey } else { $inputVal.Trim() }
+            if ([string]::IsNullOrWhiteSpace($script:ApiKey)) {
+                Write-Red "LỖI: API Key không được để trống!"
+                exit 1
+            }
         }
     }
 
     # Agent Name
     if ([string]::IsNullOrWhiteSpace($script:AgentName)) {
-        $defaultName = $env:COMPUTERNAME.ToLower()
-        $input = Read-Host "  Nhập tên Agent (Enter để dùng mặc định: $defaultName)"
-        $script:AgentName = if ([string]::IsNullOrWhiteSpace($input)) { $defaultName } else { $input }
+        $fallbackName = $env:COMPUTERNAME.ToLower()
+        $defName = if (-not [string]::IsNullOrWhiteSpace($defaultAgentName)) { $defaultAgentName } else { $fallbackName }
+        if ($Quiet) {
+            $script:AgentName = $defName
+        } else {
+            $inputVal = Read-Host "  Nhập tên Agent (Enter để dùng mặc định: $defName)"
+            $script:AgentName = if ([string]::IsNullOrWhiteSpace($inputVal)) { $defName } else { $inputVal.Trim() }
+        }
     }
 
     # Agent ID
     if ([string]::IsNullOrWhiteSpace($script:AgentID)) {
-        $defaultID = $env:COMPUTERNAME.ToLower()
-        $input = Read-Host "  Nhập Agent ID (Enter để dùng mặc định: $defaultID)"
-        $script:AgentID = if ([string]::IsNullOrWhiteSpace($input)) { $defaultID } else { $input }
+        $fallbackID = $env:COMPUTERNAME.ToLower()
+        $defID = if (-not [string]::IsNullOrWhiteSpace($defaultAgentID)) { $defaultAgentID } else { $fallbackID }
+        if ($Quiet) {
+            $script:AgentID = $defID
+        } else {
+            $inputVal = Read-Host "  Nhập Agent ID (Enter để dùng mặc định: $defID)"
+            $script:AgentID = if ([string]::IsNullOrWhiteSpace($inputVal)) { $defID } else { $inputVal.Trim() }
+        }
     }
 
     # CA Bundle
     if ([string]::IsNullOrWhiteSpace($script:CaBundlePath)) {
-        $defaultCa = Join-Path $SCRIPT_DIR "server-ca.crt"
-        if (Test-Path $defaultCa) {
+        $autoCa = Join-Path $SCRIPT_DIR "server-ca.crt"
+        if (Test-Path $autoCa) {
             Write-Green "  [Tự động] Tìm thấy server-ca.crt trong bộ cài, sẽ sử dụng file này."
-            $script:CaBundlePath = $defaultCa
-        } else {
-            $input = Read-Host "  Đường dẫn CA bundle (Enter để bỏ qua - chỉ dùng khi server có self-signed cert)"
-            $script:CaBundlePath = $input.Trim()
+            $script:CaBundlePath = $autoCa
+        } elseif ((-not [string]::IsNullOrWhiteSpace($defaultCaBundlePath)) -and (Test-Path $defaultCaBundlePath)) {
+            if ($Quiet) {
+                $script:CaBundlePath = $defaultCaBundlePath
+            } else {
+                $inputVal = Read-Host "  Đường dẫn CA bundle (Enter để dùng mặc định: $defaultCaBundlePath)"
+                $script:CaBundlePath = if ([string]::IsNullOrWhiteSpace($inputVal)) { $defaultCaBundlePath } else { $inputVal.Trim() }
+            }
+        } elseif (-not $Quiet) {
+            $inputVal = Read-Host "  Đường dẫn CA bundle (Enter để bỏ qua - chỉ dùng khi server có self-signed cert)"
+            $script:CaBundlePath = if ([string]::IsNullOrWhiteSpace($inputVal)) { "" } else { $inputVal.Trim() }
         }
     }
 
     # Discovery dirs
     if ([string]::IsNullOrWhiteSpace($script:DiscoveryDirs)) {
-        $defaultDirs = "C:\inetpub\wwwroot,C:\inetpub\certs"
-        $input = Read-Host "  Thư mục scan certificates (Enter để dùng mặc định: $defaultDirs)"
-        $script:DiscoveryDirs = if ([string]::IsNullOrWhiteSpace($input)) { $defaultDirs } else { $input }
+        $fallbackDirs = "C:\inetpub\wwwroot,C:\inetpub\certs"
+        $defDirs = if (-not [string]::IsNullOrWhiteSpace($defaultDiscoveryDirs)) { $defaultDiscoveryDirs } else { $fallbackDirs }
+        if ($Quiet) {
+            $script:DiscoveryDirs = $defDirs
+        } else {
+            $inputVal = Read-Host "  Thư mục scan certificates (Enter để dùng mặc định: $defDirs)"
+            $script:DiscoveryDirs = if ([string]::IsNullOrWhiteSpace($inputVal)) { $defDirs } else { $inputVal.Trim() }
+        }
     }
 }
 
@@ -300,7 +389,8 @@ $discoveryLine
 CERTCTL_LOG_LEVEL=info
 "@
 
-    $configContent | Set-Content -Path $CONFIG_FILE -Encoding UTF8 -Force
+    $Utf8NoBomEncoding = New-Object System.Text.UTF8Encoding $False
+    [System.IO.File]::WriteAllText($CONFIG_FILE, $configContent, $Utf8NoBomEncoding)
 
     # Restrict permissions on config file (chứa API key)
     $acl = Get-Acl $CONFIG_FILE
@@ -328,61 +418,67 @@ function Install-WindowsService {
             Stop-Service -Name $SERVICE_NAME -Force
             Start-Sleep -Seconds 2
         }
-        sc.exe delete $SERVICE_NAME | Out-Null
+        $winswDest = Join-Path $INSTALL_DIR "certctl-agent-service.exe"
+        if (Test-Path $winswDest) {
+            & $winswDest uninstall | Out-Null
+        } else {
+            sc.exe delete $SERVICE_NAME | Out-Null
+        }
         Start-Sleep -Seconds 1
     }
 
-    # Create wrapper .bat to load env file before running agent
-    $wrapperPath = Join-Path $INSTALL_DIR "certctl-agent-wrapper.bat"
-    $wrapperContent = @"
-@echo off
-REM certctl-agent Windows Service Wrapper
-REM Load environment variables from config file then start agent
-for /f "usebackq tokens=1,* delims==" %%A in ("$CONFIG_FILE") do (
-    if not "%%A" == "" (
-        echo %%A | findstr /b "#" >nul 2>&1 || set "%%A=%%B"
-    )
-)
-"$BinaryPath"
-"@
-    $wrapperContent | Set-Content -Path $wrapperPath -Encoding ASCII -Force
-
-    # Register service using sc.exe with the binary directly (env vars via registry)
-    sc.exe create $SERVICE_NAME `
-        binPath= "`"$BinaryPath`"" `
-        DisplayName= "$DISPLAY_NAME" `
-        start= auto `
-        obj= LocalSystem | Out-Null
-
-    if ($LASTEXITCODE -ne 0) {
-        Write-Red "LỖI: Không thể tạo Windows Service (exit code: $LASTEXITCODE)"
+    # Setup WinSW
+    $winswSrc = Join-Path $SCRIPT_DIR "winsw.exe"
+    if (-not (Test-Path $winswSrc)) {
+        Write-Red "LỖI: Không tìm thấy winsw.exe trong thư mục cài đặt!"
         exit 1
     }
 
-    # Set description
-    sc.exe description $SERVICE_NAME "certctl Agent - tự động gia hạn và deploy TLS certificates cho IIS" | Out-Null
+    $winswDest = Join-Path $INSTALL_DIR "certctl-agent-service.exe"
+    Copy-Item -Path $winswSrc -Destination $winswDest -Force
 
-    # Set environment variables via registry (thay thế cho EnvironmentFile trên Linux)
-    $regPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$SERVICE_NAME"
-    
-    # Load env file and set as registry multistring
-    $envVars = @()
+    # Generate XML for WinSW
+    $xmlPath = Join-Path $INSTALL_DIR "certctl-agent-service.xml"
+    $xmlContent = @"
+<service>
+  <id>$SERVICE_NAME</id>
+  <name>$DISPLAY_NAME</name>
+  <description>certctl Agent - tự động gia hạn và deploy TLS certificates cho IIS</description>
+  <executable>$BinaryPath</executable>
+  <log mode="roll"></log>
+  <onfailure action="restart" delay="10 sec"/>
+  <onfailure action="restart" delay="30 sec"/>
+  <onfailure action="restart" delay="60 sec"/>
+"@
+
+    # Add environment variables from CONFIG_FILE to XML
     if (Test-Path $CONFIG_FILE) {
         Get-Content $CONFIG_FILE | ForEach-Object {
             $line = $_.Trim()
             if ($line -and -not $line.StartsWith("#")) {
-                $envVars += $line
+                $idx = $line.IndexOf("=")
+                if ($idx -gt 0) {
+                    $key = $line.Substring(0, $idx)
+                    $val = $line.Substring($idx + 1)
+                    $val = $val -replace "&", "&amp;" -replace "<", "&lt;" -replace ">", "&gt;" -replace '"', "&quot;" -replace "'", "&apos;"
+                    $xmlContent += "`n  <env name=`"$key`" value=`"$val`"/>"
+                }
             }
         }
     }
-    if ($envVars.Count -gt 0) {
-        Set-ItemProperty -Path $regPath -Name "Environment" -Value $envVars -Type MultiString
+
+    $xmlContent += "`n</service>"
+    $Utf8NoBomEncoding = New-Object System.Text.UTF8Encoding $False
+    [System.IO.File]::WriteAllText($xmlPath, $xmlContent, $Utf8NoBomEncoding)
+
+    # Install service
+    & $winswDest install | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Red "LỖI: Không thể tạo Windows Service qua WinSW (exit code: $LASTEXITCODE)"
+        exit 1
     }
 
-    # Configure recovery: restart on failure
-    sc.exe failure $SERVICE_NAME reset= 86400 actions= restart/10000/restart/30000/restart/60000 | Out-Null
-
-    Write-Green "  [OK] Service đã đăng ký: $SERVICE_NAME"
+    Write-Green "  [OK] Service đã đăng ký: $SERVICE_NAME (qua WinSW)"
     Write-Green "  [OK] Khởi động tự động: Có"
     Write-Green "  [OK] Khởi động lại khi lỗi: Có (10s / 30s / 60s)"
 }

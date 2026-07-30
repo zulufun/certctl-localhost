@@ -1318,7 +1318,7 @@ func TestNotificationRepository_CRUD(t *testing.T) {
 
 	notif := &domain.NotificationEvent{
 		ID: "notif-test-1", Type: domain.NotificationTypeExpirationWarning,
-		CertificateID: &certID, Channel: domain.NotificationChannelEmail,
+		CertificateID: &certID, Channel: domain.NotificationChannelWebhook,
 		Recipient: "admin@example.com", Message: "Cert expiring in 7 days",
 		Status: "pending", CreatedAt: now,
 	}

@@ -43,8 +43,8 @@ export default function AuthSettingsPage() {
   return (
     <div className="space-y-4" data-testid="auth-settings-page">
       <PageHeader
-        title="Auth settings"
-        subtitle="Bundle 1 RBAC — your identity + bootstrap status. Bundle 2 will add OIDC provider config + session management here."
+        title="Cài đặt xác thực"
+        subtitle="Quản lý cài đặt định danh và quyền truy cập."
       />
 
       <section className="bg-surface border border-surface-border rounded">

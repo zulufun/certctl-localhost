@@ -81,7 +81,7 @@ const navGroups: NavGroup[] = [
       { to: '/certificates',   label: 'Chứng chỉ',   icon: ShieldCheck },
       { to: '/discovery',      label: 'Phát hiện',      icon: Search },
       { to: '/agents',         label: 'Agent',         icon: Server },
-      { to: '/fleet',          label: 'Fleet Overview', icon: Network },
+      { to: '/fleet',          label: 'Tổng quan hệ thống', icon: Network },
       { to: '/network-scans',  label: 'Quét mạng',  icon: Radar },
       { to: '/short-lived',    label: 'Chứng chỉ ngắn hạn',    icon: Timer },
     ],
@@ -102,8 +102,8 @@ const navGroups: NavGroup[] = [
     id: 'delivery',
     label: 'Phân phối',
     items: [
-      { to: '/targets',         label: 'Targets',        icon: Target },
-      { to: '/jobs',            label: 'Jobs',           icon: ListTodo },
+      { to: '/targets',         label: 'Mục tiêu (Targets)',        icon: Target },
+      { to: '/jobs',            label: 'Theo dõi các tiến trình agent (Jobs)',           icon: ListTodo },
       { to: '/health-monitor',  label: 'Giám sát sức khỏe', icon: HeartPulse },
     ],
   },
@@ -139,16 +139,10 @@ const navGroups: NavGroup[] = [
       { to: '/auth/roles',          label: 'Vai trò',          icon: UserCog },
       { to: '/auth/keys',           label: 'API Key',       icon: KeyRound },
       { to: '/auth/approvals',      label: 'Phê duyệt',      icon: CheckCircle2 },
+      { to: '/audit',               label: 'Nhật ký kiểm toán (Audit Trail)', icon: ScrollText },
       // Audit 2026-05-10 CRIT-4 closure — break-glass admin.
       { to: '/auth/breakglass',     label: 'Khẩn cấp (Break-glass)',    icon: AlertTriangle },
       { to: '/auth/settings',       label: 'Cài đặt xác thực',  icon: Cog },
-    ],
-  },
-  {
-    id: 'audit',
-    label: 'Kiểm toán',
-    items: [
-      { to: '/audit', label: 'Nhật ký hoạt động', icon: ScrollText },
     ],
   },
 ];
@@ -276,11 +270,12 @@ export default function Layout() {
           <button
             type="button"
             onClick={openSetupGuide}
+            aria-label="Setup guide"
             title="Mở lại hướng dẫn cài đặt"
             className="w-full flex items-center gap-3 px-3 py-2 text-sm rounded text-sidebar-text hover:text-white hover:bg-white/10 transition-all duration-150"
           >
             <HelpCircle className="w-[18px] h-[18px] shrink-0" strokeWidth={1.75} aria-hidden="true" />
-            Hướng dẫn cài đặt
+            <span>Hướng dẫn cài đặt</span>
           </button>
         </div>
 
@@ -303,8 +298,8 @@ export default function Layout() {
             <button
               onClick={logout}
               className="text-xs text-sidebar-text hover:text-white transition-colors shrink-0"
-              title="Sign out"
-              aria-label="Sign out"
+              title="Đăng xuất"
+              aria-label="Đăng xuất"
             >
               <LogOut className="w-4 h-4" strokeWidth={1.75} aria-hidden="true" />
             </button>

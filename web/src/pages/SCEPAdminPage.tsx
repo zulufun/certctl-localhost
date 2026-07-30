@@ -2,6 +2,19 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import {
+  Server,
+  ShieldCheck,
+  Activity,
+  RefreshCw,
+  AlertTriangle,
+  CheckCircle2,
+  Lock,
+  ArrowRight,
+  Shield,
+  Clock,
+  Key,
+} from 'lucide-react';
+import {
   getAdminSCEPIntuneStats,
   getAdminSCEPProfiles,
   reloadAdminSCEPIntuneTrust,
@@ -19,37 +32,6 @@ import type {
   AuditEvent,
   SCEPProfileStatsSnapshot,
 } from '../api/types';
-
-// SCEP RFC 8894 + Intune master bundle Phase 9 follow-up
-// (the project's SCEP GUI restructure spec): per-profile SCEP
-// administration page with three tabs.
-//
-//   Profiles (default)  — every configured SCEP profile, lean card per
-//                         profile with always-present fields (RA cert
-//                         expiry, mTLS sibling-route status,
-//                         challenge-password-set indicator). Cards on
-//                         Intune-enabled profiles get a "View Intune
-//                         details →" link that deep-links to the
-//                         Intune tab filtered to that profile.
-//   Intune Monitoring   — the existing Phase 9.4 deep-dive. Per-profile
-//                         counters (success / signature_invalid /
-//                         claim_mismatch / expired / wrong_audience /
-//                         replay / rate_limited / malformed /
-//                         compliance_failed / not_yet_valid /
-//                         unknown_version), trust anchor expiry
-//                         countdown, recent failures table, reload-
-//                         trust button + confirmation modal. Polled
-//                         every 30s via TanStack Query.
-//   Recent Activity     — full SCEP audit log filter covering all four
-//                         action codes (scep_pkcsreq, scep_renewalreq,
-//                         scep_pkcsreq_intune, scep_renewalreq_intune).
-//                         Merged + sorted descending by timestamp.
-//                         Filter chips for All / Initial / Renewal /
-//                         Intune / Static. Polled every 60s.
-//
-// Admin-gated: the page itself renders an "Admin access required" banner
-// for non-admin callers and never issues the underlying admin requests.
-// Server-side enforcement is the M-008 admin gate; this is a UX hint.
 
 const COUNTER_LABEL_ORDER = [
   'success',
@@ -80,9 +62,9 @@ const COUNTER_PRESENTATION: Record<string, { label: string; tone: 'good' | 'warn
 };
 
 const TONE_CLASS: Record<'good' | 'warn' | 'bad', string> = {
-  good: 'text-emerald-600',
-  warn: 'text-amber-600',
-  bad: 'text-red-600',
+  good: 'text-emerald-400 font-bold',
+  warn: 'text-amber-400 font-bold',
+  bad: 'text-red-400 font-bold',
 };
 
 type TabId = 'profiles' | 'intune' | 'activity';
@@ -101,10 +83,6 @@ const SCEP_AUDIT_ACTIONS = [
   'scep_renewalreq_intune',
 ] as const;
 
-// =============================================================================
-// Tone + badge helpers (shared across tabs).
-// =============================================================================
-
 function expiryBadge(days: number | null, expired: boolean): { text: string; tone: 'good' | 'warn' | 'bad' } {
   if (expired) return { text: 'EXPIRED', tone: 'bad' };
   if (days === null) return { text: 'Not loaded', tone: 'warn' };
@@ -114,22 +92,17 @@ function expiryBadge(days: number | null, expired: boolean): { text: string; ton
 }
 
 function badgeClass(tone: 'good' | 'warn' | 'bad'): string {
-  if (tone === 'good') return 'bg-emerald-100 text-emerald-800';
-  if (tone === 'warn') return 'bg-amber-100 text-amber-800';
-  return 'bg-red-100 text-red-800';
+  if (tone === 'good') return 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30';
+  if (tone === 'warn') return 'bg-amber-500/15 text-amber-400 border border-amber-500/30';
+  return 'bg-red-500/15 text-red-400 border border-red-500/30';
 }
 
 function pillClass(active: boolean): string {
   return active
-    ? 'bg-brand-100 text-brand-800 border-brand-300'
-    : 'bg-surface-alt text-ink-muted border-surface-border';
+    ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+    : 'bg-surface-muted text-ink-muted border-surface-border';
 }
 
-// soonestExpiryDays returns the smallest days_to_expiry across the
-// profile's Intune trust anchor pool. Returns null when the pool is
-// empty (the per-profile preflight should have refused this state at
-// boot, but defensive in case the holder is reloaded mid-flight to an
-// empty file).
 function soonestExpiryDays(anchors?: IntuneTrustAnchorInfo[]): number | null {
   if (!anchors || anchors.length === 0) return null;
   let min = Number.POSITIVE_INFINITY;
@@ -140,10 +113,6 @@ function soonestExpiryDays(anchors?: IntuneTrustAnchorInfo[]): number | null {
   return min === Number.POSITIVE_INFINITY ? null : min;
 }
 
-// =============================================================================
-// Profiles tab — per-profile lean card with always-present fields.
-// =============================================================================
-
 interface ProfilesTabProps {
   profiles: SCEPProfileStatsSnapshot[];
   isLoading: boolean;
@@ -152,11 +121,11 @@ interface ProfilesTabProps {
 
 function ProfilesTab({ profiles, isLoading, onViewIntuneDetails }: ProfilesTabProps) {
   if (isLoading) {
-    return <p className="text-sm text-ink-muted px-1 py-6">Loading profiles…</p>;
+    return <p className="text-xs text-ink-muted py-6">Loading profiles…</p>;
   }
   if (profiles.length === 0) {
     return (
-      <div className="rounded border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+      <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-5 text-xs text-amber-300">
         No SCEP profiles are configured. Set <code>CERTCTL_SCEP_ENABLED=true</code> and either the
         legacy single-profile env vars or <code>CERTCTL_SCEP_PROFILES=...</code> with the indexed
         per-profile family to register at least one endpoint.
@@ -164,7 +133,7 @@ function ProfilesTab({ profiles, isLoading, onViewIntuneDetails }: ProfilesTabPr
     );
   }
   return (
-    <>
+    <div className="space-y-4">
       {profiles.map(p => (
         <ProfileSummaryCard
           key={p.path_id || '(root)'}
@@ -172,7 +141,7 @@ function ProfilesTab({ profiles, isLoading, onViewIntuneDetails }: ProfilesTabPr
           onViewIntuneDetails={onViewIntuneDetails}
         />
       ))}
-    </>
+    </div>
   );
 }
 
@@ -191,72 +160,72 @@ function ProfileSummaryCard({ profile, onViewIntuneDetails }: ProfileSummaryCard
 
   return (
     <section
-      className="bg-surface border border-surface-border rounded-lg p-5 mb-4"
+      className="bg-surface border border-surface-border rounded-2xl p-5 shadow-sm space-y-4"
       data-testid={`profile-summary-${profile.path_id}`}
     >
-      <header className="flex items-center justify-between mb-3">
+      <header className="flex items-center justify-between">
         <div>
-          <h3 className="text-base font-semibold text-ink">{pathLabel}</h3>
-          <p className="text-xs text-ink-muted">Issuer: {profile.issuer_id}</p>
+          <h3 className="text-base font-bold text-ink flex items-center gap-2">
+            <Server className="w-4 h-4 text-emerald-400" />
+            <span>{pathLabel}</span>
+          </h3>
+          <p className="text-xs text-ink-muted mt-0.5">Issuer ID: <span className="font-mono text-ink">{profile.issuer_id}</span></p>
         </div>
         <span
-          className={`text-xs px-2 py-0.5 rounded-full font-medium ${badgeClass(raBadge.tone)}`}
+          className={`text-xs px-3 py-1 rounded-full font-semibold ${badgeClass(raBadge.tone)}`}
           data-testid={`ra-expiry-badge-${profile.path_id}`}
         >
           RA cert: {raBadge.text}
         </span>
       </header>
 
-      <div className="flex flex-wrap gap-2 mb-3" data-testid={`profile-badges-${profile.path_id}`}>
-        <span className={`text-xs uppercase tracking-wide px-2 py-0.5 rounded border ${pillClass(profile.challenge_password_set)}`}>
+      <div className="flex flex-wrap gap-2" data-testid={`profile-badges-${profile.path_id}`}>
+        <span className={`text-xs uppercase tracking-wide px-2.5 py-0.5 rounded-full border font-semibold ${pillClass(profile.challenge_password_set)}`}>
           Challenge password{profile.challenge_password_set ? ' set' : ' MISSING'}
         </span>
-        <span className={`text-xs uppercase tracking-wide px-2 py-0.5 rounded border ${pillClass(profile.mtls_enabled)}`}>
+        <span className={`text-xs uppercase tracking-wide px-2.5 py-0.5 rounded-full border font-semibold ${pillClass(profile.mtls_enabled)}`}>
           mTLS {profile.mtls_enabled ? 'enabled' : 'disabled'}
         </span>
-        <span className={`text-xs uppercase tracking-wide px-2 py-0.5 rounded border ${pillClass(intuneEnabled)}`}>
+        <span className={`text-xs uppercase tracking-wide px-2.5 py-0.5 rounded-full border font-semibold ${pillClass(intuneEnabled)}`}>
           Intune {intuneEnabled ? 'enabled' : 'disabled'}
         </span>
       </div>
 
-      <dl className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs text-ink-muted">
+      <dl className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs text-ink-muted bg-surface-muted/50 p-4 rounded-xl border border-surface-border">
         <div>
-          <dt className="font-semibold text-ink">RA cert subject</dt>
-          <dd className="font-mono text-xs">{profile.ra_cert_subject || '(not loaded)'}</dd>
+          <dt className="font-semibold text-ink">RA Cert Subject</dt>
+          <dd className="font-mono text-[11px] text-ink-faint truncate" title={profile.ra_cert_subject}>{profile.ra_cert_subject || '(not loaded)'}</dd>
         </div>
         {profile.ra_cert_not_after && (
           <div>
-            <dt className="font-semibold text-ink">RA cert expires</dt>
-            <dd>{formatDateTime(profile.ra_cert_not_after)}</dd>
+            <dt className="font-semibold text-ink">RA Cert Expires</dt>
+            <dd className="font-mono">{formatDateTime(profile.ra_cert_not_after)}</dd>
           </div>
         )}
         {profile.mtls_enabled && profile.mtls_trust_bundle_path && (
           <div>
-            <dt className="font-semibold text-ink">mTLS trust bundle</dt>
-            <dd className="font-mono text-xs">{profile.mtls_trust_bundle_path}</dd>
+            <dt className="font-semibold text-ink">mTLS Trust Bundle</dt>
+            <dd className="font-mono text-[11px] truncate">{profile.mtls_trust_bundle_path}</dd>
           </div>
         )}
       </dl>
 
       {intuneEnabled && (
-        <div className="mt-4 pt-3 border-t border-surface-border flex justify-end">
+        <div className="pt-2 border-t border-surface-border flex justify-end">
           <button
             type="button"
             onClick={() => onViewIntuneDetails(profile.path_id)}
-            className="text-xs text-brand-600 hover:text-brand-800 font-medium"
+            className="text-xs text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1 group"
             data-testid={`view-intune-details-${profile.path_id}`}
           >
-            View Intune details →
+            <span>View Intune details</span>
+            <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
           </button>
         </div>
       )}
     </section>
   );
 }
-
-// =============================================================================
-// Intune Monitoring tab — the existing Phase 9.4 deep-dive surface.
-// =============================================================================
 
 interface ConfirmReloadModalProps {
   profile: IntuneStatsSnapshot;
@@ -268,12 +237,6 @@ interface ConfirmReloadModalProps {
 
 function ConfirmReloadModal({ profile, onCancel, onConfirm, pending, errorMessage }: ConfirmReloadModalProps) {
   const pathLabel = profile.path_id || '(legacy /scep root)';
-  // Phase 5 closure (FE-H3): swapped the inline-managed <div role="dialog">
-  // for ModalDialog (Headless UI) so the operator gets focus trap, ESC-to-
-  // close, and backdrop-click-to-close. Pre-Phase-5 the modal had aria
-  // attrs but no focus management — Tab would escape out of the panel into
-  // the underlying page, and ESC did nothing. ModalDialog wires both to
-  // onCancel automatically.
   return (
     <ModalDialog
       open={true}
@@ -285,7 +248,7 @@ function ConfirmReloadModal({ profile, onCancel, onConfirm, pending, errorMessag
             type="button"
             onClick={onCancel}
             disabled={pending}
-            className="px-3 py-1.5 text-sm rounded border border-surface-border bg-surface hover:bg-surface-alt"
+            className="btn btn-ghost text-xs px-4 py-2 rounded-xl"
           >
             Cancel
           </button>
@@ -293,22 +256,21 @@ function ConfirmReloadModal({ profile, onCancel, onConfirm, pending, errorMessag
             type="button"
             onClick={onConfirm}
             disabled={pending}
-            className="px-3 py-1.5 text-sm rounded bg-brand-500 text-white hover:bg-brand-600 disabled:opacity-50"
+            className="btn btn-primary text-xs font-semibold px-4 py-2 rounded-xl disabled:opacity-50"
           >
             {pending ? 'Reloading…' : 'Reload trust anchor'}
           </button>
         </>
       }
     >
-      <p className="text-sm text-ink-muted mb-3">
-        This re-reads <code className="text-xs">{profile.trust_anchor_path}</code> from disk and atomically
+      <p className="text-xs text-ink-muted mb-3 leading-relaxed">
+        This re-reads <code className="text-xs font-mono text-ink">{profile.trust_anchor_path}</code> from disk and atomically
         swaps the trust pool for SCEP profile <strong>{pathLabel}</strong>. Equivalent to sending
-        <code className="text-xs"> SIGHUP </code> to the server. If the new file fails to parse, the
-        previous trust pool stays in place — enrollments keep working off the old trust anchor while you
-        fix the file.
+        <code className="text-xs font-mono"> SIGHUP </code> to the server. If the new file fails to parse, the
+        previous trust pool stays in place.
       </p>
       {errorMessage && (
-        <div className="rounded border border-red-300 bg-red-50 p-3 text-xs text-red-800">
+        <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-400">
           {errorMessage}
         </div>
       )}
@@ -327,13 +289,13 @@ interface IntuneTabProps {
 
 function IntuneTab({ profiles, isLoading, onRequestReload, highlightPathID, events, eventsLoading }: IntuneTabProps) {
   if (isLoading) {
-    return <p className="text-sm text-ink-muted px-1 py-6">Loading Intune monitoring data…</p>;
+    return <p className="text-xs text-ink-muted py-6">Loading Intune monitoring data…</p>;
   }
   const intuneProfiles = profiles.filter(p => p.enabled);
   return (
-    <>
+    <div className="space-y-6">
       {intuneProfiles.length === 0 && (
-        <div className="rounded border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 mb-4">
+        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs text-amber-300">
           No SCEP profile has Intune enabled. Set
           <code className="mx-1">CERTCTL_SCEP_PROFILE_&lt;NAME&gt;_INTUNE_ENABLED=true</code>
           plus the matching trust-anchor path env var, then restart the server.
@@ -348,23 +310,23 @@ function IntuneTab({ profiles, isLoading, onRequestReload, highlightPathID, even
         />
       ))}
 
-      <section className="bg-surface border border-surface-border rounded-lg mt-6">
-        <div className="px-4 py-3 border-b border-surface-border">
-          <h3 className="text-sm font-semibold text-ink">
-            Recent Intune-dispatched enrollments (last 50)
+      <section className="bg-surface border border-surface-border rounded-2xl overflow-hidden shadow-sm">
+        <div className="p-4 border-b border-surface-border bg-surface-muted/30">
+          <h3 className="text-xs font-bold text-ink uppercase tracking-wider flex items-center gap-2">
+            <Activity className="w-4 h-4 text-emerald-400" />
+            <span>Recent Intune-dispatched enrollments (last 50)</span>
           </h3>
-          <p className="text-xs text-ink-muted">
-            Filtered to <code>action=scep_pkcsreq_intune</code> + <code>action=scep_renewalreq_intune</code>.
-            Refreshes every 60s.
+          <p className="text-[11px] text-ink-muted mt-1 font-mono">
+            Filtered to action=scep_pkcsreq_intune + action=scep_renewalreq_intune. Refreshes every 60s.
           </p>
         </div>
         {eventsLoading ? (
-          <p className="text-sm text-ink-muted px-4 py-6">Loading audit log…</p>
+          <p className="text-xs text-ink-muted p-4">Loading audit log…</p>
         ) : (
           <RecentEventsTable events={events.slice(0, 50)} testID="intune-failures-table" emptyMessage="No recent Intune-dispatched enrollment events. Counters stay at zero until the first device hits a SCEP profile with Intune enabled." />
         )}
       </section>
-    </>
+    </div>
   );
 }
 
@@ -379,22 +341,25 @@ function IntuneProfileCard({ profile, onRequestReload, highlighted }: IntuneProf
   const days = soonestExpiryDays(profile.trust_anchors);
   const badge = expiryBadge(days, days !== null && days < 0);
   const cardClass = highlighted
-    ? 'bg-surface border-2 border-brand-400 rounded-lg p-5 mb-4 shadow-sm'
-    : 'bg-surface border border-surface-border rounded-lg p-5 mb-4';
+    ? 'bg-surface border-2 border-emerald-400 rounded-2xl p-5 shadow-lg space-y-4'
+    : 'bg-surface border border-surface-border rounded-2xl p-5 shadow-sm space-y-4';
 
   return (
     <section className={cardClass} data-testid={`profile-card-${profile.path_id}`}>
-      <header className="flex items-center justify-between mb-3">
+      <header className="flex items-center justify-between">
         <div>
-          <h3 className="text-base font-semibold text-ink">{pathLabel}</h3>
-          <p className="text-xs text-ink-muted">
-            Issuer: {profile.issuer_id}
-            {profile.audience && <> · Audience: <code>{profile.audience}</code></>}
+          <h3 className="text-base font-bold text-ink flex items-center gap-2">
+            <ShieldCheck className="w-4 h-4 text-emerald-400" />
+            <span>{pathLabel}</span>
+          </h3>
+          <p className="text-xs text-ink-muted mt-0.5">
+            Issuer: <span className="font-mono text-ink">{profile.issuer_id}</span>
+            {profile.audience && <> · Audience: <code className="font-mono">{profile.audience}</code></>}
           </p>
         </div>
         <div className="flex items-center gap-3">
           <span
-            className={`text-xs px-2 py-0.5 rounded-full font-medium ${badgeClass(badge.tone)}`}
+            className={`text-xs px-3 py-1 rounded-full font-semibold ${badgeClass(badge.tone)}`}
             data-testid={`expiry-badge-${profile.path_id}`}
           >
             Trust anchor: {badge.text}
@@ -402,7 +367,7 @@ function IntuneProfileCard({ profile, onRequestReload, highlighted }: IntuneProf
           <button
             type="button"
             onClick={() => onRequestReload(profile)}
-            className="text-xs px-2 py-1 rounded border border-surface-border bg-surface hover:bg-surface-alt"
+            className="btn btn-ghost text-xs font-semibold px-3 py-1.5 rounded-xl border border-surface-border"
             data-testid={`reload-button-${profile.path_id}`}
           >
             Reload trust
@@ -410,68 +375,66 @@ function IntuneProfileCard({ profile, onRequestReload, highlighted }: IntuneProf
         </div>
       </header>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
         {COUNTER_LABEL_ORDER.map(label => {
           const value = profile.counters?.[label] ?? 0;
           const presentation = COUNTER_PRESENTATION[label];
           return (
-            <div key={label} className="border border-surface-border rounded p-2">
-              <div className={`text-lg font-semibold ${TONE_CLASS[presentation.tone]}`} data-testid={`counter-${profile.path_id}-${label}`}>
+            <div key={label} className="bg-surface-muted/60 border border-surface-border rounded-xl p-3">
+              <div className={`text-xl font-bold font-mono ${TONE_CLASS[presentation.tone]}`} data-testid={`counter-${profile.path_id}-${label}`}>
                 {value}
               </div>
-              <div className="text-xs text-ink-muted uppercase tracking-wide">{presentation.label}</div>
+              <div className="text-[10px] text-ink-muted uppercase tracking-wider font-semibold mt-0.5">{presentation.label}</div>
             </div>
           );
         })}
       </div>
 
-      <dl className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs text-ink-muted">
+      <dl className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs text-ink-muted bg-surface-muted/30 p-3 rounded-xl border border-surface-border">
         <div>
-          <dt className="font-semibold text-ink">Replay cache size</dt>
-          <dd>{profile.replay_cache_size}</dd>
+          <dt className="font-semibold text-ink">Replay Cache Size</dt>
+          <dd className="font-mono">{profile.replay_cache_size}</dd>
         </div>
         <div>
-          <dt className="font-semibold text-ink">Per-device rate limit</dt>
+          <dt className="font-semibold text-ink">Per-device Rate Limit</dt>
           <dd>{profile.rate_limit_disabled ? 'Disabled' : 'Active'}</dd>
         </div>
         <div>
-          <dt className="font-semibold text-ink">Trust anchors</dt>
-          <dd>{profile.trust_anchors?.length ?? 0}</dd>
+          <dt className="font-semibold text-ink">Trust Anchors</dt>
+          <dd className="font-mono">{profile.trust_anchors?.length ?? 0}</dd>
         </div>
       </dl>
 
       {profile.trust_anchors && profile.trust_anchors.length > 0 && (
-        <details className="mt-3 text-xs text-ink-muted">
-          <summary className="cursor-pointer font-semibold text-ink">Trust anchor details</summary>
-          <table className="mt-2 w-full text-left">
-            <thead>
-              <tr className="text-xs text-ink-muted uppercase">
-                <th className="py-1 pr-2">Subject</th>
-                <th className="py-1 pr-2">Not after</th>
-                <th className="py-1">Days to expiry</th>
-              </tr>
-            </thead>
-            <tbody>
-              {profile.trust_anchors.map(a => (
-                <tr key={`${profile.path_id}-${a.subject}-${a.not_after}`} className="border-t border-surface-border">
-                  <td className="py-1 pr-2 font-mono">{a.subject || '(empty CN)'}</td>
-                  <td className="py-1 pr-2">{formatDateTime(a.not_after)}</td>
-                  <td className={`py-1 ${a.expired ? 'text-red-600 font-semibold' : ''}`}>
-                    {a.expired ? 'EXPIRED' : a.days_to_expiry}
-                  </td>
+        <details className="text-xs text-ink-muted">
+          <summary className="cursor-pointer font-semibold text-ink hover:text-emerald-400 transition-colors">Trust Anchor Details</summary>
+          <div className="mt-2 overflow-x-auto rounded-xl border border-surface-border">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-surface-muted text-ink-muted uppercase text-[10px] tracking-wider">
+                <tr>
+                  <th className="py-2 px-3">Subject</th>
+                  <th className="py-2 px-3">Not After</th>
+                  <th className="py-2 px-3">Days To Expiry</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-surface-border">
+                {profile.trust_anchors.map(a => (
+                  <tr key={`${profile.path_id}-${a.subject}-${a.not_after}`}>
+                    <td className="py-2 px-3 font-mono text-ink">{a.subject || '(empty CN)'}</td>
+                    <td className="py-2 px-3 font-mono">{formatDateTime(a.not_after)}</td>
+                    <td className={`py-2 px-3 font-bold ${a.expired ? 'text-red-400' : 'text-emerald-400'}`}>
+                      {a.expired ? 'EXPIRED' : a.days_to_expiry}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </details>
       )}
     </section>
   );
 }
-
-// =============================================================================
-// Recent Activity tab — full SCEP audit log filter.
-// =============================================================================
 
 interface ActivityTabProps {
   events: AuditEvent[];
@@ -498,12 +461,14 @@ function activityFilterMatches(filter: ActivityFilter, action: string): boolean 
 function ActivityTab({ events, isLoading, filter, setFilter }: ActivityTabProps) {
   const filtered = events.filter(e => activityFilterMatches(filter, e.action));
   return (
-    <section className="bg-surface border border-surface-border rounded-lg" data-testid="activity-tab">
-      <div className="px-4 py-3 border-b border-surface-border">
-        <h3 className="text-sm font-semibold text-ink">SCEP enrollment audit log (last 100)</h3>
-        <p className="text-xs text-ink-muted mb-3">
-          Merged across <code>scep_pkcsreq</code> + <code>scep_renewalreq</code> +
-          <code> scep_pkcsreq_intune</code> + <code>scep_renewalreq_intune</code>. Refreshes every 60s.
+    <section className="bg-surface border border-surface-border rounded-2xl shadow-sm overflow-hidden" data-testid="activity-tab">
+      <div className="p-4 border-b border-surface-border bg-surface-muted/30 space-y-3">
+        <h3 className="text-xs font-bold text-ink uppercase tracking-wider flex items-center gap-2">
+          <Activity className="w-4 h-4 text-emerald-400" />
+          <span>SCEP enrollment audit log (last 100)</span>
+        </h3>
+        <p className="text-[11px] text-ink-muted font-mono">
+          Merged across scep_pkcsreq + scep_renewalreq + scep_pkcsreq_intune + scep_renewalreq_intune. Refreshes every 60s.
         </p>
         <div className="flex flex-wrap gap-2" data-testid="activity-filter-chips">
           {(['all', 'initial', 'renewal', 'intune', 'static'] as const).map(f => (
@@ -511,10 +476,10 @@ function ActivityTab({ events, isLoading, filter, setFilter }: ActivityTabProps)
               key={f}
               type="button"
               onClick={() => setFilter(f)}
-              className={`text-xs px-2 py-1 rounded border ${
+              className={`text-xs px-3 py-1 rounded-full font-semibold border transition-all ${
                 filter === f
-                  ? 'bg-brand-100 text-brand-800 border-brand-300'
-                  : 'bg-surface text-ink-muted border-surface-border hover:bg-surface-alt'
+                  ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30 shadow-sm'
+                  : 'bg-surface-muted text-ink-muted border-surface-border hover:bg-surface-hover'
               }`}
               data-testid={`activity-filter-${f}`}
             >
@@ -524,7 +489,7 @@ function ActivityTab({ events, isLoading, filter, setFilter }: ActivityTabProps)
         </div>
       </div>
       {isLoading ? (
-        <p className="text-sm text-ink-muted px-4 py-6">Loading audit log…</p>
+        <p className="text-xs text-ink-muted p-4">Loading audit log…</p>
       ) : (
         <RecentEventsTable
           events={filtered.slice(0, 100)}
@@ -540,10 +505,6 @@ function ActivityTab({ events, isLoading, filter, setFilter }: ActivityTabProps)
   );
 }
 
-// =============================================================================
-// Shared events table.
-// =============================================================================
-
 interface RecentEventsTableProps {
   events: AuditEvent[];
   testID: string;
@@ -552,43 +513,36 @@ interface RecentEventsTableProps {
 
 function RecentEventsTable({ events, testID, emptyMessage }: RecentEventsTableProps) {
   if (events.length === 0) {
-    return <p className="text-sm text-ink-muted px-4 py-6">{emptyMessage}</p>;
+    return <p className="text-xs text-ink-muted p-4 text-center">{emptyMessage}</p>;
   }
   return (
-    <table className="w-full text-sm" data-testid={testID}>
-      <thead className="text-xs text-ink-muted uppercase tracking-wide">
-        <tr>
-          <th className="py-2 pl-4 pr-2 text-left">Timestamp</th>
-          <th className="py-2 pr-2 text-left">Action</th>
-          <th className="py-2 pr-2 text-left">Resource</th>
-          <th className="py-2 pr-4 text-left">Details</th>
-        </tr>
-      </thead>
-      <tbody>
-        {events.map(e => (
-          <tr key={e.id} className="border-t border-surface-border">
-            <td className="py-2 pl-4 pr-2 font-mono text-xs">{formatDateTime(e.timestamp)}</td>
-            <td className="py-2 pr-2">{e.action}</td>
-            <td className="py-2 pr-2">{e.resource_type} · <code className="text-xs">{e.resource_id}</code></td>
-            <td className="py-2 pr-4 text-xs text-ink-muted">
-              {e.details ? Object.entries(e.details).map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : String(v)}`).join(' · ') : '-'}
-            </td>
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs" data-testid={testID}>
+        <thead className="bg-surface-muted/50 text-ink-muted uppercase text-[10px] tracking-wider border-b border-surface-border">
+          <tr>
+            <th className="py-2.5 px-4 text-left">Timestamp</th>
+            <th className="py-2.5 px-3 text-left">Action</th>
+            <th className="py-2.5 px-3 text-left">Resource</th>
+            <th className="py-2.5 px-4 text-left">Details</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody className="divide-y divide-surface-border/50">
+          {events.map(e => (
+            <tr key={e.id} className="hover:bg-surface-muted/40 transition-colors">
+              <td className="py-2 px-4 font-mono text-ink-muted">{formatDateTime(e.timestamp)}</td>
+              <td className="py-2 px-3 font-mono font-semibold text-emerald-400">{e.action}</td>
+              <td className="py-2 px-3 text-ink-muted">{e.resource_type} · <code className="text-xs text-ink font-mono">{e.resource_id}</code></td>
+              <td className="py-2 px-4 text-[11px] text-ink-muted font-mono max-w-xs truncate">
+                {e.details ? Object.entries(e.details).map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : String(v)}`).join(' · ') : '-'}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
-// =============================================================================
-// Top-level page.
-// =============================================================================
-
-// pickInitialTab honors three signals (precedence high → low):
-//   1. ?tab=intune|activity in the query string (deep link)
-//   2. Pathname ending in /scep/intune (legacy route alias from
-//      Phase 9.4; preserved so external bookmarks land on Intune)
-//   3. Default to 'profiles'
 function pickInitialTab(searchParams: URLSearchParams, pathname: string): TabId {
   const fromQuery = searchParams.get('tab');
   if (fromQuery === 'intune' || fromQuery === 'activity') return fromQuery;
@@ -608,8 +562,6 @@ export default function SCEPAdminPage() {
   const [reloadError, setReloadError] = useState<string | undefined>(undefined);
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>('all');
 
-  // Keep URL in sync with tab + highlighted profile so deep links survive
-  // page reloads + browser back/forward.
   useEffect(() => {
     const next = new URLSearchParams(searchParams);
     if (activeTab === 'profiles') {
@@ -627,7 +579,6 @@ export default function SCEPAdminPage() {
     }
   }, [activeTab, highlightPathID, searchParams, setSearchParams]);
 
-  // Always-present per-profile data (Profiles tab).
   const profilesQuery = useQuery({
     queryKey: ['admin', 'scep', 'profiles'],
     queryFn: getAdminSCEPProfiles,
@@ -635,7 +586,6 @@ export default function SCEPAdminPage() {
     refetchInterval: 30_000,
   });
 
-  // Intune deep-dive data (Intune tab).
   const intuneStatsQuery = useQuery({
     queryKey: ['admin', 'scep', 'intune', 'stats'],
     queryFn: getAdminSCEPIntuneStats,
@@ -643,9 +593,6 @@ export default function SCEPAdminPage() {
     refetchInterval: 30_000,
   });
 
-  // Audit log queries — four parallel queries (one per SCEP action) so
-  // both the Intune tab's recent-failures table and the Activity tab's
-  // full SCEP audit feed can pull from the same React Query cache.
   const auditQueries = SCEP_AUDIT_ACTIONS.map(action =>
     // eslint-disable-next-line react-hooks/rules-of-hooks
     useQuery({
@@ -724,35 +671,40 @@ export default function SCEPAdminPage() {
               void profilesQuery.refetch();
               if (activeTab === 'intune') void intuneStatsQuery.refetch();
             }}
-            className="text-xs px-3 py-1.5 rounded border border-surface-border bg-surface hover:bg-surface-alt"
+            className="btn btn-ghost text-xs font-semibold px-3 py-2 rounded-xl border border-surface-border flex items-center gap-1.5"
             data-testid="refresh-stats-button"
           >
-            Refresh now
+            <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Refresh now</span>
           </button>
         }
       />
+
       <div className="border-b border-surface-border bg-surface px-6">
-        <nav className="flex gap-1 -mb-px" data-testid="scep-admin-tabs">
+        <nav className="flex gap-2 -mb-px" data-testid="scep-admin-tabs">
           {(['profiles', 'intune', 'activity'] as TabId[]).map(t => (
             <button
               key={t}
               type="button"
               onClick={() => setActiveTab(t)}
-              className={`px-4 py-2.5 text-sm border-b-2 transition-colors ${
+              className={`px-4 py-3 text-xs font-bold border-b-2 transition-all flex items-center gap-2 ${
                 activeTab === t
-                  ? 'border-brand-500 text-brand-700 font-semibold'
+                  ? 'border-emerald-400 text-emerald-400 font-bold'
                   : 'border-transparent text-ink-muted hover:text-ink hover:border-surface-border'
               }`}
               data-testid={`tab-${t}`}
               aria-pressed={activeTab === t}
             >
-              {TAB_LABELS[t]}
+              {t === 'profiles' && <Server className="w-3.5 h-3.5" />}
+              {t === 'intune' && <ShieldCheck className="w-3.5 h-3.5" />}
+              {t === 'activity' && <Activity className="w-3.5 h-3.5" />}
+              <span>{TAB_LABELS[t]}</span>
             </button>
           ))}
         </nav>
       </div>
 
-      <div className="p-6 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto p-6 space-y-6">
         {profilesQuery.error && activeTab === 'profiles' && (
           <ErrorState error={profilesQuery.error as Error} onRetry={() => profilesQuery.refetch()} />
         )}

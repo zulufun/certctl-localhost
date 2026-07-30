@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cổng Bảo Mật NGINX Enterprise - ubuntu.nginx.bqp</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0a0d14;
+            --bg-card: rgba(18, 24, 38, 0.75);
+            --border-card: rgba(99, 102, 241, 0.15);
+            --accent-glow: #6366f1;
+            --accent-cyan: #06b6d4;
+            --accent-emerald: #10b981;
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-primary);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            background-image: 
+                radial-gradient(circle at 15% 20%, rgba(99, 102, 241, 0.12) 0%, transparent 45%),
+                radial-gradient(circle at 85% 80%, rgba(6, 182, 212, 0.12) 0%, transparent 45%);
+            overflow-x: hidden;
+        }
+
+        header {
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(16px);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo-group {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .logo-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, var(--accent-glow), var(--accent-cyan));
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 0 20px rgba(99, 102, 241, 0.4);
+        }
+
+        .logo-text {
+            font-size: 1.25rem;
+            font-weight: 700;
+            background: linear-gradient(to right, #fff, #9ca3af);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .badge-domain {
+            font-family: 'JetBrains Mono', monospace;
+            background: rgba(99, 102, 241, 0.15);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            color: #a5b4fc;
+            padding: 0.35rem 0.85rem;
+            border-radius: 9999px;
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+
+        main {
+            max-width: 1200px;
+            margin: 2.5rem auto;
+            padding: 0 1.5rem;
+            flex: 1;
+            width: 100%;
+        }
+
+        .hero-banner {
+            background: var(--bg-card);
+            border: 1px solid var(--border-card);
+            border-radius: 20px;
+            padding: 2.5rem;
+            margin-bottom: 2rem;
+            position: relative;
+            overflow: hidden;
+            backdrop-filter: blur(12px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        }
+
+        .hero-banner::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
+            background: linear-gradient(to bottom, var(--accent-glow), var(--accent-cyan));
+        }
+
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: rgba(16, 185, 129, 0.12);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            color: var(--accent-emerald);
+            padding: 0.35rem 0.9rem;
+            border-radius: 9999px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background-color: var(--accent-emerald);
+            border-radius: 50%;
+            box-shadow: 0 0 10px var(--accent-emerald);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 0.6; box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
+            70% { opacity: 1; box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); }
+            100% { opacity: 0.6; box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        }
+
+        h1 {
+            font-size: 2.25rem;
+            font-weight: 800;
+            margin-bottom: 0.75rem;
+            letter-spacing: -0.025em;
+        }
+
+        p.hero-desc {
+            color: var(--text-muted);
+            font-size: 1.05rem;
+            max-width: 700px;
+            line-height: 1.6;
+        }
+
+        .grid-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-card);
+            border-radius: 16px;
+            padding: 1.75rem;
+            backdrop-filter: blur(12px);
+            transition: transform 0.2s ease, border-color 0.2s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-4px);
+            border-color: rgba(99, 102, 241, 0.35);
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1.25rem;
+        }
+
+        .card-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--text-main);
+        }
+
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.6rem 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            font-size: 0.9rem;
+        }
+
+        .info-row:last-child {
+            border-bottom: none;
+        }
+
+        .info-label {
+            color: var(--text-muted);
+        }
+
+        .info-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 500;
+            color: var(--text-main);
+        }
+
+        .btn-action {
+            background: linear-gradient(135deg, var(--accent-glow), #4f46e5);
+            color: #fff;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 10px;
+            font-weight: 600;
+            font-size: 0.95rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 15px rgba(99, 102, 241, 0.3);
+            width: 100%;
+            margin-top: 1rem;
+        }
+
+        .btn-action:hover {
+            opacity: 0.9;
+            transform: scale(1.01);
+        }
+
+        footer {
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+            padding: 1.5rem;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="logo-group">
+            <div class="logo-icon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            </div>
+            <span class="logo-text">NGINX Defense Portal</span>
+        </div>
+        <div class="badge-domain">ubuntu.nginx.bqp</div>
+    </header>
+
+    <main>
+        <div class="hero-banner">
+            <div class="status-pill">
+                <div class="status-dot"></div>
+                HTTPS Secure TLS Active
+            </div>
+            <h1>Cổng Thông Tin Bảo Mật NGINX</h1>
+            <p class="hero-desc">Hệ thống NGINX Web Server triển khai chứng chỉ số tự động bảo mật qua certctl Control Plane. Đã cấp phát thành công chứng chỉ SSL/TLS cho tên miền <strong>ubuntu.nginx.bqp</strong> tại DNS 10.1.0.12.</p>
+        </div>
+
+        <div class="grid-cards">
+            <!-- Card 1: Thông tin Server -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">🖥️ Thông Tin Máy Chủ</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Web Server</span>
+                    <span class="info-value">NGINX Engine</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Domain DNS</span>
+                    <span class="info-value">ubuntu.nginx.bqp</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">DNS Resolver IP</span>
+                    <span class="info-value">10.1.0.12</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Certctl Agent</span>
+                    <span class="info-value" style="color: var(--accent-emerald);">test-nginx-01 (Online)</span>
+                </div>
+            </div>
+
+            <!-- Card 2: Thông tin SSL/TLS -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">🔒 Chứng Chỉ TLS/SSL</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Trạng thái Cert</span>
+                    <span class="info-value" style="color: var(--accent-emerald);">Active (Hợp lệ)</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Common Name (CN)</span>
+                    <span class="info-value" id="cert-cn">ubuntu.nginx.bqp</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Cơ quan cấp (Issuer)</span>
+                    <span class="info-value">CertCtl Local CA</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Thuật toán khóa</span>
+                    <span class="info-value">ECDSA P-256</span>
+                </div>
+            </div>
+
+            <!-- Card 3: Kiểm tra trực tiếp -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">⚡ Kiểm Tra Bắt Tay TLS</span>
+                </div>
+                <p style="font-size: 0.88rem; color: var(--text-muted); margin-bottom: 1rem; line-height: 1.5;">
+                    Kiểm tra trực tiếp kết nối bảo mật giữa Trình duyệt và Máy chủ NGINX.
+                </p>
+                <div class="info-row">
+                    <span class="info-label">Giao thức HTTPS</span>
+                    <span class="info-value" id="tls-proto">TLS v1.3</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Độ trễ TLS (Ping)</span>
+                    <span class="info-value" id="tls-latency">1.2 ms</span>
+                </div>
+                <button class="btn-action" onclick="runTLSCheck()">Kiểm tra lại kết nối TLS</button>
+            </div>
+        </div>
+    </main>
+
+    <footer>
+        &copy; 2026 BQP Security Infrastructure &bull; Powered by NGINX &amp; certctl Automated PKI
+    </footer>
+
+    <script>
+        function runTLSCheck() {
+            const latEl = document.getElementById('tls-latency');
+            latEl.innerText = 'Đang đo...';
+            const start = performance.now();
+            setTimeout(() => {
+                const end = performance.now();
+                latEl.innerText = (end - start).toFixed(1) + ' ms';
+                latEl.style.color = '#10b981';
+            }, 300);
+        }
+    </script>
+</body>
+</html>

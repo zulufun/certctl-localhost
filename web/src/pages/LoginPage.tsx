@@ -65,6 +65,9 @@ export default function LoginPage() {
   const { login, error: authError } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [useApiKey, setUseApiKey] = useState(false);
   const [key, setKey] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -126,15 +129,30 @@ export default function LoginPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!key.trim()) return;
-    setSubmitting(true);
-    setLocalError(null);
-    try {
-      await login(key.trim());
-    } catch {
-      setLocalError('API Key không hợp lệ. Vui lòng kiểm tra lại khóa của bạn và thử lại.');
-    } finally {
-      setSubmitting(false);
+    if (useApiKey) {
+      if (!key.trim()) return;
+      setSubmitting(true);
+      setLocalError(null);
+      try {
+        await login(key.trim());
+        navigate('/');
+      } catch {
+        setLocalError('API Key không hợp lệ. Vui lòng kiểm tra lại khóa của bạn và thử lại.');
+      } finally {
+        setSubmitting(false);
+      }
+    } else {
+      if (!email.trim() || !password) return;
+      setSubmitting(true);
+      setLocalError(null);
+      try {
+        await login(email.trim(), password);
+        navigate('/');
+      } catch {
+        setLocalError('Email hoặc mật khẩu không đúng. Vui lòng kiểm tra lại.');
+      } finally {
+        setSubmitting(false);
+      }
     }
   }
 
@@ -214,24 +232,59 @@ export default function LoginPage() {
         >
           {providers.length > 0 && (
             <p className="text-xs text-ink-muted text-center pb-2 border-b border-surface-border">
-              — hoặc đăng nhập bằng API Key —
+              — hoặc đăng nhập bằng tài khoản cục bộ —
             </p>
           )}
-          <div>
-            <label htmlFor="api-key" className="block text-sm font-medium text-ink-muted mb-1.5">
-              API Key
-            </label>
-            <input
-              id="api-key"
-              type="password"
-              value={key}
-              onChange={(e) => setKey(e.target.value)}
-              placeholder="Nhập API Key của bạn"
-              autoFocus={providers.length === 0}
-              className="w-full bg-white border border-surface-border rounded px-3 py-2.5 text-sm text-ink placeholder-ink-faint focus:outline-none focus:border-brand-400 focus:ring-1 focus:ring-brand-400/20"
-              data-testid="login-api-key-input"
-            />
-          </div>
+
+          {!useApiKey ? (
+            <>
+              <div>
+                <label htmlFor="email" className="block text-sm font-medium text-ink-muted mb-1.5">
+                  Email
+                </label>
+                <input
+                  id="email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="Nhập email của bạn"
+                  autoFocus={providers.length === 0}
+                  className="w-full bg-white border border-surface-border rounded px-3 py-2.5 text-sm text-ink placeholder-ink-faint focus:outline-none focus:border-brand-400 focus:ring-1 focus:ring-brand-400/20"
+                  data-testid="login-email-input"
+                />
+              </div>
+              <div>
+                <label htmlFor="password" className="block text-sm font-medium text-ink-muted mb-1.5">
+                  Mật khẩu
+                </label>
+                <input
+                  id="password"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Nhập mật khẩu"
+                  className="w-full bg-white border border-surface-border rounded px-3 py-2.5 text-sm text-ink placeholder-ink-faint focus:outline-none focus:border-brand-400 focus:ring-1 focus:ring-brand-400/20"
+                  data-testid="login-password-input"
+                />
+              </div>
+            </>
+          ) : (
+            <div>
+              <label htmlFor="api-key" className="block text-sm font-medium text-ink-muted mb-1.5">
+                API Key
+              </label>
+              <input
+                id="api-key"
+                type="password"
+                value={key}
+                onChange={(e) => setKey(e.target.value)}
+                placeholder="Nhập API Key của bạn"
+                autoFocus
+                className="w-full bg-white border border-surface-border rounded px-3 py-2.5 text-sm text-ink placeholder-ink-faint focus:outline-none focus:border-brand-400 focus:ring-1 focus:ring-brand-400/20"
+                data-testid="login-api-key-input"
+              />
+            </div>
+          )}
 
           {error && (
             <div
@@ -244,16 +297,22 @@ export default function LoginPage() {
 
           <button
             type="submit"
-            disabled={submitting || !key.trim()}
+            disabled={submitting || (useApiKey ? !key.trim() : (!email.trim() || !password))}
             className="w-full bg-brand-400 hover:bg-brand-500 text-white py-2.5 text-sm font-medium rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            data-testid="login-api-key-submit"
+            data-testid="login-submit"
           >
             {submitting ? 'Đang xác thực...' : 'Đăng nhập'}
           </button>
 
-          <p className="text-xs text-ink-muted text-center">
-            API Key được thiết lập qua biến môi trường <code className="text-ink-faint bg-page px-1 py-0.5 rounded">CERTCTL_AUTH_SECRET</code> trên máy chủ.
-          </p>
+          <div className="text-center mt-2">
+            <button
+              type="button"
+              onClick={() => { setUseApiKey(!useApiKey); setLocalError(null); }}
+              className="text-xs text-brand-500 hover:underline"
+            >
+              {useApiKey ? 'Đăng nhập bằng Email/Mật khẩu' : 'Đăng nhập bằng API Key'}
+            </button>
+          </div>
         </form>
 
         {/* Break-glass entry — low-visibility on purpose. CRIT-4 closure. */}

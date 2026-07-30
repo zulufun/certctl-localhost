@@ -206,6 +206,16 @@ export const checkAuth = (key: string) =>
     return r.json() as Promise<AuthCheckResponse>;
   });
 
+export const localLogin = (email: string, password: string) =>
+  fetch(`/auth/local/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  }).then(r => {
+    if (!r.ok) throw new Error('Invalid email or password');
+    return r.json() as Promise<{message: string; user: any}>;
+  });
+
 // =============================================================================
 // Bundle 1 Phase 10 — RBAC management API surface.
 //
@@ -958,9 +968,14 @@ export const retireAgent = async (
     ? `${BASE}/agents/${id}?${qs.toString()}`
     : `${BASE}/agents/${id}`;
 
+  const headers = authHeaders();
+  const csrf = readCSRFCookie();
+  if (csrf) headers['X-CSRF-Token'] = csrf;
+
   const res = await fetch(url, {
     method: 'DELETE',
-    headers: authHeaders(),
+    credentials: 'include',
+    headers,
   });
 
   if (res.status === 401) {
@@ -1399,3 +1414,15 @@ export const retireIntermediateCA = (id: string, note: string, confirm: boolean)
     `${BASE}/intermediates/${id}/retire`,
     { method: 'POST', body: JSON.stringify({ note, confirm }) },
   );
+
+export const authCreateUser = (email: string, display_name: string, password: string) =>
+  fetchJSON<AuthUser>(`${BASE}/auth/users`, {
+    method: 'POST',
+    body: JSON.stringify({ email, display_name, password }),
+  });
+
+export const authUpdatePassword = (id: string, password: string) =>
+  fetchJSON<void>(`${BASE}/auth/users/${id}/password`, {
+    method: 'POST',
+    body: JSON.stringify({ password }),
+  });

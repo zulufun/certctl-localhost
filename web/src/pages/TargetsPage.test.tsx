@@ -88,8 +88,8 @@ describe('TargetsPage — T-1 page coverage', () => {
     });
     // Pre-D-2 the column read a phantom `status` field; post-D-2 it derives
     // 'Enabled' / 'Disabled' purely from the boolean.
-    expect(screen.getAllByText(/Enabled/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Disabled/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Enabled|Đã kích hoạt/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Disabled|Đã vô hiệu hóa/i).length).toBeGreaterThan(0);
   });
 
   it('Delete confirm flow calls deleteTarget(id)', async () => {

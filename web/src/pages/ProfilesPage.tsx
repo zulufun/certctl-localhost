@@ -1,5 +1,17 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  FileText,
+  Plus,
+  Edit3,
+  Trash2,
+  Clock,
+  Key,
+  Shield,
+  Sparkles,
+  Zap,
+  CheckCircle2,
+} from 'lucide-react';
 import { useTrackedMutation } from '../hooks/useTrackedMutation';
 import { getProfiles, deleteProfile, createProfile, updateProfile } from '../api/client';
 import PageHeader from '../components/PageHeader';
@@ -11,7 +23,7 @@ import { formatDateTime } from '../api/utils';
 import type { CertificateProfile } from '../api/types';
 
 function formatTTL(seconds: number): string {
-  if (seconds === 0) return 'No limit';
+  if (seconds === 0) return 'Không giới hạn';
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
@@ -111,76 +123,88 @@ function CreateProfileModal({ isOpen, onClose, onSuccess, isLoading, error }: Cr
 
   if (!isOpen) return null;
 
-  const inputClass = 'w-full bg-white border border-surface-border rounded px-3 py-2 text-sm text-ink focus:outline-none focus:border-brand-400';
-  const selectClass = 'bg-white border border-surface-border rounded px-3 py-2 text-sm text-ink focus:outline-none focus:border-brand-400';
+  const inputClass = 'w-full bg-surface-muted border border-surface-border rounded-xl px-3 py-2 text-xs text-ink focus:outline-none focus:border-emerald-400';
+  const selectClass = 'bg-surface-muted border border-surface-border rounded-xl px-3 py-2 text-xs text-ink focus:outline-none focus:border-emerald-400';
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-surface border border-surface-border rounded p-5 w-full max-w-lg shadow-xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-        <h2 className="text-lg font-semibold text-ink mb-4">Create Profile</h2>
-        {error && <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">{error}</div>}
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-surface border border-surface-border rounded-2xl p-6 w-full max-w-xl shadow-2xl max-h-[90vh] overflow-y-auto space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between pb-3 border-b border-surface-border">
+          <h2 className="text-base font-bold text-ink flex items-center gap-2">
+            <Sparkles className="w-5 h-5 text-emerald-400" />
+            <span>Tạo Certificate Profile Mới</span>
+          </h2>
+          <button onClick={onClose} className="text-ink-muted hover:text-ink text-xs">✕</button>
+        </div>
+
+        {error && <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-xs text-red-400">{error}</div>}
+
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-ink mb-1">Name *</label>
+            <label className="block text-xs font-medium text-ink mb-1">Tên Profile *</label>
             <input
               value={name}
               onChange={e => setName(e.target.value)}
               className={inputClass}
-              placeholder="e.g., Web Server Certs"
+              placeholder="Ví dụ: Web Server TLS Profile"
               required
             />
           </div>
+
           <div>
-            <label className="block text-sm font-medium text-ink mb-1">Description</label>
+            <label className="block text-xs font-medium text-ink mb-1">Mô tả</label>
             <textarea
               value={description}
               onChange={e => setDescription(e.target.value)}
               className={inputClass}
-              placeholder="Optional description"
+              placeholder="Mô tả mục đích sử dụng profile này"
               rows={2}
             />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-ink mb-1">Max TTL (seconds)</label>
-            <input
-              type="number"
-              value={ttl}
-              onChange={e => setTtl(e.target.value)}
-              className={inputClass}
-              placeholder="86400"
-            />
-            <p className="text-xs text-ink-muted mt-1">
-              {shortLived
-                ? 'Short-lived certs require TTL under 3600 (1 hour). e.g. 300 = 5m, 1800 = 30m'
-                : 'e.g. 86400 = 1 day, 2592000 = 30 days'}
-            </p>
-            {shortLived && parseInt(ttl) >= 3600 && (
-              <p className="text-xs text-amber-600 mt-1">TTL must be under 3600 for short-lived certs</p>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              id="shortLived"
-              checked={shortLived}
-              onChange={e => {
-                setShortLived(e.target.checked);
-                if (e.target.checked && parseInt(ttl) >= 3600) {
-                  setTtl('300');
-                }
-              }}
-              className="w-4 h-4"
-            />
-            <label htmlFor="shortLived" className="text-sm text-ink">Allow short-lived certs</label>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-ink mb-1">Thời Hạn Tối Đa Max TTL (Giây)</label>
+              <input
+                type="number"
+                value={ttl}
+                onChange={e => setTtl(e.target.value)}
+                className={inputClass}
+                placeholder="86400"
+              />
+              <p className="text-[11px] text-ink-muted mt-1">
+                {shortLived ? 'Cấp ngắn hạn yêu cầu TTL < 3600s' : 'Ví dụ: 86400s = 1 ngày'}
+              </p>
+            </div>
+
+            <div className="flex items-center pt-4">
+              <label className="flex items-center gap-2.5 cursor-pointer bg-surface-muted/50 p-2.5 rounded-xl border border-surface-border w-full">
+                <input
+                  type="checkbox"
+                  checked={shortLived}
+                  onChange={e => {
+                    setShortLived(e.target.checked);
+                    if (e.target.checked && parseInt(ttl) >= 3600) {
+                      setTtl('300');
+                    }
+                  }}
+                  className="w-4 h-4 text-emerald-500 rounded focus:ring-0"
+                />
+                <div className="text-xs">
+                  <span className="font-bold text-ink block">Allow Short-Lived</span>
+                  <span className="text-[10px] text-ink-muted">Cho phép chứng chỉ siêu ngắn hạn</span>
+                </div>
+              </label>
+            </div>
           </div>
 
           {/* Allowed Key Algorithms */}
           <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="block text-sm font-medium text-ink">Allowed Key Algorithms</label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-xs font-semibold text-ink">Thuật Toán Khóa Cho Phép (Algorithms)</label>
               {keyAlgorithms.length < AVAILABLE_ALGORITHMS.length && (
-                <button type="button" onClick={addAlgorithm} className="text-xs text-brand-600 hover:text-brand-700 font-medium">
-                  + Add
+                <button type="button" onClick={addAlgorithm} className="text-xs text-emerald-400 font-bold hover:underline">
+                  + Thêm Thuật Toán
                 </button>
               )}
             </div>
@@ -202,82 +226,73 @@ function CreateProfileModal({ isOpen, onClose, onSuccess, isLoading, error }: Cr
                     <select
                       value={ka.min_size}
                       onChange={e => updateAlgorithm(idx, 'min_size', parseInt(e.target.value))}
-                      className={selectClass + ' w-24'}
+                      className={selectClass + ' w-28'}
                     >
                       {(ALGORITHM_MIN_SIZES[ka.algorithm] || []).map(s => (
-                        <option key={s} value={s}>{s}+</option>
+                        <option key={s} value={s}>{s}+ bits</option>
                       ))}
                     </select>
                   ) : (
-                    <span className="text-xs text-ink-muted w-24 text-center">fixed</span>
+                    <span className="text-xs text-ink-muted w-28 text-center bg-surface-muted py-2 rounded-xl border border-surface-border">fixed</span>
                   )}
-                  <button type="button" onClick={() => removeAlgorithm(idx)} className="text-xs text-red-500 hover:text-red-600">
-                    Remove
+                  <button type="button" onClick={() => removeAlgorithm(idx)} className="text-xs text-red-400 font-bold px-2">
+                    Xóa
                   </button>
                 </div>
               ))}
-              {keyAlgorithms.length === 0 && (
-                <p className="text-xs text-ink-faint">No algorithms configured. Click + Add to allow key types.</p>
-              )}
             </div>
           </div>
 
           {/* Allowed EKUs */}
           <div>
-            <label className="block text-sm font-medium text-ink mb-1">Allowed Extended Key Usages</label>
-            <div className="space-y-1.5">
+            <label className="block text-xs font-semibold text-ink mb-1.5">Mục Đích Sử Dụng Khóa (EKUs)</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-surface-muted/50 p-3 rounded-xl border border-surface-border">
               {AVAILABLE_EKUS.map(eku => (
-                <label key={eku.value} className="flex items-center gap-2 cursor-pointer">
+                <label key={eku.value} className="flex items-center gap-2 cursor-pointer text-xs">
                   <input
                     type="checkbox"
                     checked={selectedEkus.includes(eku.value)}
                     onChange={() => toggleEku(eku.value)}
-                    className="w-4 h-4"
+                    className="w-3.5 h-3.5 text-emerald-500 rounded focus:ring-0"
                   />
-                  <span className="text-sm text-ink">{eku.label}</span>
+                  <span className="text-ink">{eku.label}</span>
                 </label>
               ))}
             </div>
           </div>
 
-          {/* Required SAN Patterns */}
+          {/* SAN Patterns */}
           <div>
-            <label className="block text-sm font-medium text-ink mb-1">Required SAN Patterns</label>
+            <label className="block text-xs font-medium text-ink mb-1">Mẫu Tên Miền Bắt Buộc (SAN Patterns)</label>
             <input
               value={sanPatterns}
               onChange={e => setSanPatterns(e.target.value)}
               className={inputClass}
-              placeholder="e.g., *.example.com, api.internal"
+              placeholder="*.example.com, *.internal.bqp"
             />
-            <p className="text-xs text-ink-muted mt-1">Comma-separated patterns. Leave empty for no constraints.</p>
           </div>
 
-          {/* SPIFFE URI Pattern */}
+          {/* SPIFFE URI */}
           <div>
-            <label className="block text-sm font-medium text-ink mb-1">SPIFFE URI Pattern</label>
+            <label className="block text-xs font-medium text-ink mb-1">SPIFFE URI Pattern</label>
             <input
               value={spiffePattern}
               onChange={e => setSpiffePattern(e.target.value)}
               className={inputClass}
-              placeholder="e.g., spiffe://example.org/service/*"
+              placeholder="spiffe://example.org/service/*"
             />
-            <p className="text-xs text-ink-muted mt-1">Optional workload identity URI SAN pattern.</p>
           </div>
 
-          <div className="flex gap-2 pt-4">
+          <div className="flex gap-3 pt-3">
+            <button type="button" onClick={onClose} className="btn btn-ghost text-xs flex-1">
+              Hủy
+            </button>
             <button
               type="submit"
               disabled={isLoading}
-              className="flex-1 btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
+              className="btn btn-primary text-xs font-semibold flex-1 rounded-xl disabled:opacity-50"
             >
-              {isLoading ? 'Creating...' : 'Create Profile'}
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex-1 btn btn-ghost"
-            >
-              Cancel
+              {isLoading ? 'Đang tạo...' : 'Tạo Certificate Profile'}
             </button>
           </div>
         </form>
@@ -289,11 +304,6 @@ function CreateProfileModal({ isOpen, onClose, onSuccess, isLoading, error }: Cr
 export default function ProfilesPage() {
   const queryClient = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
-  // B-1 master closure (cat-b-7a34f893a8f9): rename + description Edit
-  // affordance. Deeper policy fields (allowed_ekus, max_ttl_seconds,
-  // allowed_key_algorithms, etc.) stay on the delete-and-recreate path
-  // for v1 — closing the audit's destructive-rename complaint requires
-  // only the simple metadata edit. Documented as a follow-up.
   const [editingProfile, setEditingProfile] = useState<CertificateProfile | null>(null);
 
   const { data, isLoading, error, refetch } = useQuery({
@@ -325,25 +335,26 @@ export default function ProfilesPage() {
   const columns: Column<CertificateProfile>[] = [
     {
       key: 'name',
-      label: 'Profile',
+      label: 'Profile Name & ID',
       render: (p) => (
         <div>
-          <div className="font-medium text-ink">{p.name}</div>
-          <div className="text-xs text-ink-faint font-mono">{p.id}</div>
+          <div className="font-bold text-ink text-sm">{p.name}</div>
+          <div className="text-[11px] text-ink-faint font-mono mt-0.5">{p.id}</div>
           {p.description && (
-            <div className="text-xs text-ink-muted mt-0.5 max-w-xs truncate">{p.description}</div>
+            <div className="text-xs text-ink-muted mt-1 max-w-xs truncate italic">{p.description}</div>
           )}
         </div>
       ),
     },
     {
       key: 'algorithms',
-      label: 'Key Algorithms',
+      label: 'Thuật Toán Khóa',
       render: (p) => (
         <div className="flex flex-wrap gap-1">
           {(p.allowed_key_algorithms || []).map((alg, i) => (
-            <span key={i} className="badge badge-neutral text-xs">
-              {alg.algorithm} {alg.min_size}+
+            <span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono bg-surface-muted border border-surface-border text-emerald-400 font-semibold">
+              <Key className="w-3 h-3" />
+              <span>{alg.algorithm} {alg.min_size}+</span>
             </span>
           ))}
         </div>
@@ -353,11 +364,12 @@ export default function ProfilesPage() {
       key: 'ttl',
       label: 'Max TTL',
       render: (p) => (
-        <div>
-          <span className="text-ink">{formatTTL(p.max_ttl_seconds)}</span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-mono font-bold text-ink">{formatTTL(p.max_ttl_seconds)}</span>
           {p.allow_short_lived && (
-            <span className="ml-2 text-xs text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">
-              short-lived
+            <span className="inline-flex items-center gap-1 text-[10px] text-amber-400 bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 rounded-full font-bold">
+              <Zap className="w-3 h-3" />
+              <span>short-lived</span>
             </span>
           )}
         </div>
@@ -369,46 +381,50 @@ export default function ProfilesPage() {
       render: (p) => (
         <div className="flex flex-wrap gap-1">
           {(p.allowed_ekus || []).map((eku, i) => (
-            <span key={i} className="text-xs text-ink-muted">{eku}</span>
+            <span key={i} className="text-xs text-ink-muted bg-surface-muted px-2 py-0.5 rounded border border-surface-border font-mono">
+              {eku}
+            </span>
           ))}
         </div>
       ),
     },
     {
       key: 'spiffe',
-      label: 'SPIFFE',
+      label: 'SPIFFE Pattern',
       render: (p) => (
         p.spiffe_uri_pattern
-          ? <span className="text-xs text-brand-400 font-mono">{p.spiffe_uri_pattern}</span>
-          : <span className="text-ink-faint">&mdash;</span>
+          ? <span className="text-xs text-emerald-400 font-mono bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">{p.spiffe_uri_pattern}</span>
+          : <span className="text-ink-faint text-xs">&mdash;</span>
       ),
     },
     {
       key: 'enabled',
-      label: 'Status',
+      label: 'Trạng Thái',
       render: (p) => <StatusBadge status={p.enabled ? 'active' : 'disabled'} />,
     },
     {
       key: 'created',
-      label: 'Created',
-      render: (p) => <span className="text-xs text-ink-muted">{formatDateTime(p.created_at)}</span>,
+      label: 'Ngày Tạo',
+      render: (p) => <span className="text-xs text-ink-muted font-mono">{formatDateTime(p.created_at)}</span>,
     },
     {
       key: 'actions',
       label: '',
       render: (p) => (
-        <div className="flex gap-3 justify-end">
+        <div className="flex items-center justify-end gap-2">
           <button
             onClick={(e) => { e.stopPropagation(); setEditingProfile(p); }}
-            className="text-xs text-brand-400 hover:text-brand-500 transition-colors"
+            className="px-2.5 py-1 text-xs font-medium text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 rounded-lg transition-colors flex items-center gap-1"
           >
-            Edit
+            <Edit3 className="w-3.5 h-3.5" />
+            <span>Edit</span>
           </button>
           <button
             onClick={(e) => { e.stopPropagation(); if (confirm(`Delete profile ${p.name}?`)) deleteMutation.mutate(p.id); }}
-            className="text-xs text-red-600 hover:text-red-700 transition-colors"
+            className="px-2.5 py-1 text-xs font-medium text-red-400 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded-lg transition-colors flex items-center gap-1"
           >
-            Delete
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>Delete</span>
           </button>
         </div>
       ),
@@ -421,18 +437,27 @@ export default function ProfilesPage() {
         title="Certificate Profiles"
         subtitle={data ? `${data.total} profiles` : undefined}
         action={
-          <button onClick={() => setShowCreate(true)} className="btn btn-primary">
-            + New Profile
+          <button
+            onClick={() => setShowCreate(true)}
+            className="btn btn-primary text-xs font-semibold px-4 py-2 rounded-xl flex items-center gap-1.5 shadow-lg shadow-emerald-500/10"
+          >
+            <Plus className="w-4 h-4" />
+            <span>+ New Profile</span>
           </button>
         }
       />
-      <div className="flex-1 overflow-y-auto">
-        {error ? (
-          <ErrorState error={error as Error} onRetry={() => refetch()} />
-        ) : (
-          <DataTable columns={columns} data={data?.data || []} isLoading={isLoading} emptyMessage="No profiles configured" />
-        )}
+
+      <div className="p-6 max-w-7xl mx-auto space-y-6">
+        {/* Main Content */}
+        <div className="bg-surface rounded-2xl border border-surface-border shadow-sm overflow-hidden">
+          {error ? (
+            <ErrorState error={error as Error} onRetry={() => refetch()} />
+          ) : (
+            <DataTable columns={columns} data={data?.data || []} isLoading={isLoading} emptyMessage="No profiles configured" />
+          )}
+        </div>
       </div>
+
       <CreateProfileModal
         isOpen={showCreate}
         onClose={() => setShowCreate(false)}
@@ -443,6 +468,7 @@ export default function ProfilesPage() {
         isLoading={createMutation.isPending}
         error={createMutation.error ? (createMutation.error as Error).message : null}
       />
+
       <EditProfileModal
         profile={editingProfile}
         onClose={() => setEditingProfile(null)}
@@ -457,13 +483,6 @@ export default function ProfilesPage() {
   );
 }
 
-// EditProfileModal — B-1 closure (cat-b-7a34f893a8f9). Rename +
-// description only. Deeper policy fields (allowed_ekus, max_ttl_seconds,
-// allowed_key_algorithms, required_san_patterns, spiffe_uri_pattern,
-// allow_short_lived) stay on delete-and-recreate for v1 — closing the
-// audit's destructive-rename complaint requires only the simple
-// metadata edit. The PUT contract takes a full Partial<CertificateProfile>
-// so we forward the existing policy fields untouched.
 interface EditProfileModalProps {
   profile: CertificateProfile | null;
   onClose: () => void;
@@ -489,8 +508,6 @@ function EditProfileModal({ profile, onClose, onSave, isSaving, error }: EditPro
     e.preventDefault();
     if (!name.trim()) return;
     onSave({
-      // Pass the full struct minus id/timestamps. Backend PUT needs the
-      // policy fields preserved so we forward them from the editing target.
       name: name.trim(),
       description: description.trim(),
       allowed_key_algorithms: profile.allowed_key_algorithms,
@@ -504,31 +521,40 @@ function EditProfileModal({ profile, onClose, onSave, isSaving, error }: EditPro
   };
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-surface border border-surface-border rounded p-5 w-full max-w-md shadow-xl" onClick={e => e.stopPropagation()}>
-        <h2 className="text-lg font-semibold text-ink mb-4">Edit Profile</h2>
-        <p className="text-xs text-ink-muted mb-4 font-mono">{profile.id}</p>
-        {error && <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">{error}</div>}
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-surface border border-surface-border rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4" onClick={e => e.stopPropagation()}>
+        <h2 className="text-lg font-bold text-ink flex items-center gap-2">
+          <Edit3 className="w-5 h-5 text-emerald-400" />
+          <span>Edit Profile Metadata</span>
+        </h2>
+        <p className="text-xs text-ink-muted font-mono bg-surface-muted px-2.5 py-1 rounded-lg border border-surface-border">
+          ID: {profile.id}
+        </p>
+        {error && <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-xs text-red-400">{error}</div>}
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-ink mb-1">Name *</label>
-            <input value={name} onChange={e => setName(e.target.value)} required
-              className="w-full bg-white border border-surface-border rounded px-3 py-2 text-sm text-ink focus:outline-none focus:border-brand-400" />
+            <label className="block text-xs font-medium text-ink mb-1">Tên Profile *</label>
+            <input
+              value={name}
+              onChange={e => setName(e.target.value)}
+              required
+              className="w-full bg-surface-muted border border-surface-border rounded-xl px-3 py-2 text-sm text-ink focus:outline-none focus:border-emerald-400"
+            />
           </div>
           <div>
-            <label className="block text-sm font-medium text-ink mb-1">Description</label>
-            <textarea value={description} onChange={e => setDescription(e.target.value)} rows={2}
-              className="w-full bg-white border border-surface-border rounded px-3 py-2 text-sm text-ink focus:outline-none focus:border-brand-400" />
+            <label className="block text-xs font-medium text-ink mb-1">Mô Tả</label>
+            <textarea
+              value={description}
+              onChange={e => setDescription(e.target.value)}
+              rows={2}
+              className="w-full bg-surface-muted border border-surface-border rounded-xl px-3 py-2 text-xs text-ink focus:outline-none focus:border-emerald-400"
+            />
           </div>
-          <p className="text-xs text-ink-faint">
-            Policy fields (TTL, EKUs, key algorithms, SAN patterns) stay on the
-            create-recreate path for v1. See CHANGELOG B-1 known follow-ups.
-          </p>
-          <div className="flex gap-2 pt-4">
-            <button type="submit" disabled={isSaving} className="flex-1 btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed">
-              {isSaving ? 'Saving...' : 'Save Changes'}
+          <div className="flex gap-3 pt-2">
+            <button type="button" onClick={onClose} className="btn btn-ghost text-xs flex-1">Hủy</button>
+            <button type="submit" disabled={isSaving} className="btn btn-primary text-xs font-semibold flex-1 rounded-xl">
+              {isSaving ? 'Đang lưu...' : 'Lưu Thay Đổi'}
             </button>
-            <button type="button" onClick={onClose} className="flex-1 btn btn-ghost">Cancel</button>
           </div>
         </form>
       </div>

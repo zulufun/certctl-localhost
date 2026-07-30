@@ -62,6 +62,10 @@ func (r *retentionStubUserRepo) GetByOIDCSubject(_ context.Context, _, _ string)
 
 func (r *retentionStubUserRepo) Create(_ context.Context, _ *userdomain.User) error { return nil }
 
+func (r *retentionStubUserRepo) GetByEmail(ctx context.Context, tenantID, email string) (*userdomain.User, error) {
+	return nil, repository.ErrUserNotFound
+}
+
 func (r *retentionStubUserRepo) Update(_ context.Context, u *userdomain.User) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

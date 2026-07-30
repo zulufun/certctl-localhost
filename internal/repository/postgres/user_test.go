@@ -20,6 +20,7 @@ func newValidUser(suffix, providerID string) *userdomain.User {
 		DisplayName:         "User " + suffix,
 		OIDCSubject:         "subject-" + suffix,
 		OIDCProviderID:      providerID,
+		PasswordHash:        "$2a$10$w09uYv/7x0VnJ1HqW1jQ9O/p1uP9q1uP9q1uP9q1uP9q1uP9q1uP",
 		WebAuthnCredentials: []byte("[]"),
 	}
 }
@@ -29,6 +30,7 @@ func TestUserRepository_CreateAndGet(t *testing.T) {
 		t.Skip("integration test in short mode")
 	}
 	db := getTestDB(t).freshSchema(t)
+	db.Exec("DELETE FROM users")
 	providerRepo := postgres.NewOIDCProviderRepository(db)
 	userRepo := postgres.NewUserRepository(db)
 	ctx := context.Background()
@@ -59,6 +61,7 @@ func TestUserRepository_GetNotFound(t *testing.T) {
 		t.Skip("integration test in short mode")
 	}
 	db := getTestDB(t).freshSchema(t)
+	db.Exec("DELETE FROM users")
 	repo := postgres.NewUserRepository(db)
 	ctx := context.Background()
 
@@ -73,6 +76,7 @@ func TestUserRepository_GetByOIDCSubject(t *testing.T) {
 		t.Skip("integration test in short mode")
 	}
 	db := getTestDB(t).freshSchema(t)
+	db.Exec("DELETE FROM users")
 	providerRepo := postgres.NewOIDCProviderRepository(db)
 	userRepo := postgres.NewUserRepository(db)
 	ctx := context.Background()
@@ -106,6 +110,7 @@ func TestUserRepository_DuplicateOIDCSubjectRejected(t *testing.T) {
 		t.Skip("integration test in short mode")
 	}
 	db := getTestDB(t).freshSchema(t)
+	db.Exec("DELETE FROM users")
 	providerRepo := postgres.NewOIDCProviderRepository(db)
 	userRepo := postgres.NewUserRepository(db)
 	ctx := context.Background()
@@ -131,6 +136,7 @@ func TestUserRepository_UpdateMutableFields(t *testing.T) {
 		t.Skip("integration test in short mode")
 	}
 	db := getTestDB(t).freshSchema(t)
+	db.Exec("DELETE FROM users")
 	providerRepo := postgres.NewOIDCProviderRepository(db)
 	userRepo := postgres.NewUserRepository(db)
 	ctx := context.Background()
@@ -165,11 +171,45 @@ func TestUserRepository_UpdateMutableFields(t *testing.T) {
 	}
 }
 
+func TestUserRepository_GetByEmail(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test in short mode")
+	}
+	ctx := context.Background()
+	db := getTestDB(t).freshSchema(t)
+	db.Exec("DELETE FROM users")
+	repo := postgres.NewUserRepository(db)
+
+	u1 := newValidUser("email-lookup", "")
+	u1.OIDCSubject = ""
+	u1.OIDCProviderID = ""
+	
+	if err := repo.Create(ctx, u1); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	
+	// GET BY EMAIL
+	got, err := repo.GetByEmail(ctx, u1.TenantID, u1.Email)
+	if err != nil {
+		t.Fatalf("GetByEmail: %v", err)
+	}
+	if got.ID != u1.ID {
+		t.Errorf("got ID %q; want %q", got.ID, u1.ID)
+	}
+	
+	// NOT FOUND
+	_, err = repo.GetByEmail(ctx, u1.TenantID, "not-exist@example.com")
+	if !errors.Is(err, repository.ErrUserNotFound) {
+		t.Errorf("expected ErrUserNotFound, got: %v", err)
+	}
+}
+
 func TestUserRepository_ListAll(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration test in short mode")
 	}
 	db := getTestDB(t).freshSchema(t)
+	db.Exec("DELETE FROM users")
 	providerRepo := postgres.NewOIDCProviderRepository(db)
 	userRepo := postgres.NewUserRepository(db)
 	ctx := context.Background()
@@ -210,6 +250,7 @@ func TestUserRepository_DeactivatedAt_RoundTrip(t *testing.T) {
 		t.Skip("integration test in short mode")
 	}
 	db := getTestDB(t).freshSchema(t)
+	db.Exec("DELETE FROM users")
 	providerRepo := postgres.NewOIDCProviderRepository(db)
 	userRepo := postgres.NewUserRepository(db)
 	ctx := context.Background()
@@ -302,21 +343,34 @@ func TestUserRepository_DeactivatedAt_CreateWritesNullForActive(t *testing.T) {
 		t.Skip("integration test in short mode")
 	}
 	db := getTestDB(t).freshSchema(t)
+	db.Exec("DELETE FROM users")
 	providerRepo := postgres.NewOIDCProviderRepository(db)
-	userRepo := postgres.NewUserRepository(db)
+	repo := postgres.NewUserRepository(db)
 	ctx := context.Background()
 
 	p := newValidProvider("create-nil")
 	if err := providerRepo.Create(ctx, p); err != nil {
 		t.Fatalf("Create provider: %v", err)
 	}
-	u := newValidUser("active-user", p.ID)
-	u.DeactivatedAt = nil // explicit: new user is active
-	if err := userRepo.Create(ctx, u); err != nil {
+	u1 := newValidUser("1", p.ID)
+	u1.LastLoginAt = time.Now().UTC().Truncate(time.Microsecond)
+
+	// Test Local User Creation (empty OIDC fields)
+	u2 := newValidUser("local-1", "")
+	u2.OIDCSubject = ""
+	u2.OIDCProviderID = ""
+	u2.LastLoginAt = time.Now().UTC().Truncate(time.Microsecond)
+
+	// CREATE
+	if err := repo.Create(ctx, u1); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	if err := repo.Create(ctx, u2); err != nil {
+		t.Fatalf("Create local: %v", err)
+	}
 
-	got, err := userRepo.Get(ctx, u.ID)
+	// GET
+	got, err := repo.Get(ctx, u1.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -339,6 +393,7 @@ func TestUserRepository_DeactivatedAt_CreatePersistsPreDeactivated(t *testing.T)
 		t.Skip("integration test in short mode")
 	}
 	db := getTestDB(t).freshSchema(t)
+	db.Exec("DELETE FROM users")
 	providerRepo := postgres.NewOIDCProviderRepository(db)
 	userRepo := postgres.NewUserRepository(db)
 	ctx := context.Background()
@@ -374,6 +429,7 @@ func TestUserRepository_FKRestrictsProviderDelete(t *testing.T) {
 		t.Skip("integration test in short mode")
 	}
 	db := getTestDB(t).freshSchema(t)
+	db.Exec("DELETE FROM users")
 	providerRepo := postgres.NewOIDCProviderRepository(db)
 	userRepo := postgres.NewUserRepository(db)
 	ctx := context.Background()

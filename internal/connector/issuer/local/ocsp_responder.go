@@ -169,13 +169,14 @@ func (c *Connector) bootstrapOCSPResponder(ctx context.Context, previous *domain
 	// their own ref-naming policy and we just use whatever ref they
 	// return.
 	if fd, ok := c.signerDriver.(*signer.FileDriver); ok {
-		// Inject the destination path. DirHardener stays whatever the
-		// caller installed (typically keystore.ensureKeyDirSecure
-		// adapter from cmd/server/main.go).
+		// Inject the destination path.
 		if fd.GenerateOutPath == nil {
 			fd.GenerateOutPath = func(_ signer.Algorithm) (string, error) {
 				return keyPath, nil
 			}
+		}
+		if fd.DirHardener == nil {
+			fd.DirHardener = ensureKeyDirSecure
 		}
 	}
 

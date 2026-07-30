@@ -1,6 +1,18 @@
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
+import {
+  Activity,
+  Server,
+  Wifi,
+  WifiOff,
+  Cpu,
+  Layers,
+  Sparkles,
+  ChevronRight,
+  ShieldCheck,
+  Package,
+} from 'lucide-react';
 import { getAgents } from '../api/client';
 import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
@@ -8,8 +20,8 @@ import type { Agent } from '../api/types';
 
 const OS_COLORS: Record<string, string> = {
   linux: '#f97316',
-  darwin: '#2ea88f',
-  windows: '#8b5cf6',
+  darwin: '#06b6d4',
+  windows: '#a855f7',
   unknown: '#64748b',
 };
 
@@ -61,10 +73,11 @@ function groupAgents(agents: Agent[]): GroupedAgents[] {
 const CustomTooltip = ({ active, payload }: any) => {
   if (!active || !payload?.length) return null;
   return (
-    <div className="bg-surface border border-surface-border rounded px-3 py-2 text-xs shadow-lg">
+    <div className="bg-surface border border-surface-border rounded-xl px-3 py-2 text-xs shadow-xl backdrop-blur-md">
       {payload.map((entry: any, i: number) => (
-        <p key={i} style={{ color: entry.payload?.fill || entry.color }} className="font-medium">
-          {entry.name}: {entry.value}
+        <p key={i} style={{ color: entry.payload?.fill || entry.color }} className="font-bold flex items-center gap-1.5">
+          <span>{entry.name}:</span>
+          <span>{entry.value}</span>
         </p>
       ))}
     </div>
@@ -82,12 +95,10 @@ export default function AgentFleetPage() {
   const agents = agentsResponse?.data || [];
   const groups = groupAgents(agents);
 
-  // Summary stats
   const totalAgents = agents.length;
   const onlineAgents = agents.filter(a => a.status === 'Online').length;
   const offlineAgents = totalAgents - onlineAgents;
 
-  // OS distribution for pie chart
   const osDistribution = agents.reduce<Record<string, number>>((acc, a) => {
     const os = a.os || 'unknown';
     acc[os] = (acc[os] || 0) + 1;
@@ -99,13 +110,11 @@ export default function AgentFleetPage() {
     fill: OS_COLORS[name.toLowerCase()] || '#64748b',
   }));
 
-  // Status for pie chart
   const statusPieData = [
     { name: 'Online', value: onlineAgents, fill: STATUS_COLORS.Online },
     { name: 'Offline', value: offlineAgents, fill: STATUS_COLORS.Offline },
   ].filter(s => s.value > 0);
 
-  // Version distribution
   const versionCounts = agents.reduce<Record<string, number>>((acc, a) => {
     const v = a.version || 'unknown';
     acc[v] = (acc[v] || 0) + 1;
@@ -119,151 +128,214 @@ export default function AgentFleetPage() {
         subtitle={`${totalAgents} agents — ${onlineAgents} online, ${offlineAgents} offline`}
       />
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
-        {/* Summary Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div className="bg-surface border border-surface-border border-t-4 border-t-brand-400 rounded p-5 text-center shadow-sm">
+
+      {/* Top Metric Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="bg-surface border border-surface-border rounded-2xl p-5 shadow-sm flex items-center justify-between">
+          <div>
             <p className="text-xs font-semibold text-ink-muted uppercase tracking-wider">Total Agents</p>
-            <p className="text-3xl font-bold mt-2 text-brand-500">{totalAgents}</p>
+            <p className="text-3xl font-bold mt-1 text-emerald-400 font-mono">{totalAgents}</p>
           </div>
-          <div className="bg-surface border border-surface-border border-t-4 border-t-emerald-500 rounded p-5 text-center shadow-sm">
-            <p className="text-xs font-semibold text-ink-muted uppercase tracking-wider">Online</p>
-            <p className="text-3xl font-bold mt-2 text-emerald-600">{onlineAgents}</p>
-          </div>
-          <div className="bg-surface border border-surface-border border-t-4 border-t-red-500 rounded p-5 text-center shadow-sm">
-            <p className="text-xs font-semibold text-ink-muted uppercase tracking-wider">Offline</p>
-            <p className="text-3xl font-bold mt-2 text-red-600">{offlineAgents}</p>
+          <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+            <Server className="w-6 h-6" />
           </div>
         </div>
 
-        {/* Charts */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* OS Distribution */}
-          <div className="bg-surface border border-surface-border rounded p-5 shadow-sm">
-            <h3 className="text-sm font-semibold text-ink-muted mb-4">OS Distribution</h3>
-            <div className="h-48">
-              {osPieData.length > 0 ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={osPieData} cx="50%" cy="50%" outerRadius={70} dataKey="value" label={({ name, value }) => `${name}: ${value}`} labelLine={false}>
-                      {osPieData.map((entry, index) => (
-                        <Cell key={index} fill={entry.fill} />
-                      ))}
-                    </Pie>
-                    <Tooltip content={<CustomTooltip />} />
-                  </PieChart>
-                </ResponsiveContainer>
-              ) : (
-                <div className="h-full flex items-center justify-center text-sm text-ink-faint">No data</div>
-              )}
-            </div>
+        <div className="bg-surface border border-emerald-500/30 rounded-2xl p-5 shadow-sm bg-gradient-to-br from-emerald-950/20 to-transparent flex items-center justify-between">
+          <div>
+            <p className="text-xs font-semibold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+              <Wifi className="w-3.5 h-3.5" />
+              <span>Online Agents</span>
+            </p>
+            <p className="text-3xl font-bold mt-1 text-emerald-400 font-mono">{onlineAgents}</p>
           </div>
-
-          {/* Status Distribution */}
-          <div className="bg-surface border border-surface-border rounded p-5 shadow-sm">
-            <h3 className="text-sm font-semibold text-ink-muted mb-4">Status Distribution</h3>
-            <div className="h-48">
-              {statusPieData.length > 0 ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={statusPieData} cx="50%" cy="50%" innerRadius={40} outerRadius={70} dataKey="value" label={({ name, value }) => `${name}: ${value}`} labelLine={false}>
-                      {statusPieData.map((entry, index) => (
-                        <Cell key={index} fill={entry.fill} />
-                      ))}
-                    </Pie>
-                    <Tooltip content={<CustomTooltip />} />
-                  </PieChart>
-                </ResponsiveContainer>
-              ) : (
-                <div className="h-full flex items-center justify-center text-sm text-ink-faint">No data</div>
-              )}
-            </div>
-          </div>
-
-          {/* Version Breakdown */}
-          <div className="bg-surface border border-surface-border rounded p-5 shadow-sm">
-            <h3 className="text-sm font-semibold text-ink-muted mb-4">Agent Versions</h3>
-            <div className="space-y-3">
-              {Object.entries(versionCounts)
-                .sort(([, a], [, b]) => b - a)
-                .map(([version, count]) => (
-                  <div key={version} className="flex items-center justify-between">
-                    <span className="text-sm text-ink font-mono">{version}</span>
-                    <div className="flex items-center gap-2">
-                      <div className="w-24 bg-surface-border rounded-full h-2">
-                        <div
-                          className="bg-brand-400 h-2 rounded-full"
-                          style={{ width: `${(count / totalAgents) * 100}%` }}
-                        />
-                      </div>
-                      <span className="text-xs text-ink-muted w-8 text-right">{count}</span>
-                    </div>
-                  </div>
-                ))}
-              {Object.keys(versionCounts).length === 0 && (
-                <p className="text-sm text-ink-faint">No version data</p>
-              )}
-            </div>
+          <div className="p-3.5 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400">
+            <ShieldCheck className="w-6 h-6" />
           </div>
         </div>
 
-        {/* Environment Groups */}
-        <div>
-          <h3 className="text-sm font-semibold text-ink-muted mb-4">Fleet by Platform</h3>
-          {isLoading ? (
-            <p className="text-sm text-ink-faint">Loading fleet data...</p>
-          ) : groups.length === 0 ? (
-            <p className="text-sm text-ink-faint">No agents registered</p>
-          ) : (
-            <div className="space-y-4">
-              {groups.map(group => (
-                <div key={`${group.os}/${group.arch}`} className="bg-surface border border-surface-border rounded overflow-hidden shadow-sm">
-                  <div className="px-5 py-4 border-b border-surface-border flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div
-                        className="w-3 h-3 rounded-full"
-                        style={{ backgroundColor: OS_COLORS[group.os.toLowerCase()] || '#64748b' }}
-                      />
-                      <h4 className="text-sm font-medium text-ink">
-                        {displayOS(group.os)} / {group.arch}
-                      </h4>
-                      <span className="text-xs text-ink-faint">
-                        {group.agents.length} agent{group.agents.length !== 1 ? 's' : ''}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-3 text-xs">
-                      <span className="text-emerald-600">{group.online} online</span>
-                      {group.offline > 0 && <span className="text-red-600">{group.offline} offline</span>}
-                    </div>
-                  </div>
-                  <div className="divide-y divide-surface-border/50">
-                    {group.agents.map(agent => (
-                      <div
-                        key={agent.id}
-                        onClick={() => navigate(`/agents/${agent.id}`)}
-                        className="px-5 py-3 flex items-center justify-between hover:bg-surface-muted cursor-pointer transition-colors"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className={`w-2 h-2 rounded-full ${agent.status === 'Online' ? 'bg-emerald-500' : 'bg-red-500'}`} />
-                          <div>
-                            <div className="text-sm text-ink">{agent.name || agent.hostname}</div>
-                            <div className="text-xs text-ink-faint">{agent.ip_address || agent.id}</div>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-4">
-                          {agent.version && (
-                            <span className="text-xs text-ink-muted font-mono">{agent.version}</span>
-                          )}
-                          <StatusBadge status={agent.status} />
-                        </div>
-                      </div>
+        <div className="bg-surface border border-red-500/30 rounded-2xl p-5 shadow-sm bg-gradient-to-br from-red-950/20 to-transparent flex items-center justify-between">
+          <div>
+            <p className="text-xs font-semibold text-red-400 uppercase tracking-wider flex items-center gap-1.5">
+              <WifiOff className="w-3.5 h-3.5" />
+              <span>Offline Agents</span>
+            </p>
+            <p className="text-3xl font-bold mt-1 text-red-400 font-mono">{offlineAgents}</p>
+          </div>
+          <div className="p-3.5 rounded-2xl bg-red-500/15 border border-red-500/30 text-red-400">
+            <WifiOff className="w-6 h-6" />
+          </div>
+        </div>
+      </div>
+
+      {/* Analytics Charts & Breakdown */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* OS Distribution */}
+        <div className="bg-surface border border-surface-border rounded-2xl p-5 shadow-sm">
+          <h3 className="text-xs font-semibold text-ink-muted uppercase tracking-wider mb-4 flex items-center gap-2">
+            <Cpu className="w-4 h-4 text-emerald-400" />
+            <span>Phân bố Hệ Điều Hành (OS)</span>
+          </h3>
+          <div className="h-52">
+            {osPieData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={osPieData}
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={70}
+                    dataKey="value"
+                    label={({ name, value }) => `${name}: ${value}`}
+                    labelLine={false}
+                  >
+                    {osPieData.map((entry, index) => (
+                      <Cell key={index} fill={entry.fill} />
                     ))}
+                  </Pie>
+                  <Tooltip content={<CustomTooltip />} />
+                </PieChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex items-center justify-center text-xs text-ink-faint">Không có dữ liệu</div>
+            )}
+          </div>
+        </div>
+
+        {/* Status Distribution */}
+        <div className="bg-surface border border-surface-border rounded-2xl p-5 shadow-sm">
+          <h3 className="text-xs font-semibold text-ink-muted uppercase tracking-wider mb-4 flex items-center gap-2">
+            <Activity className="w-4 h-4 text-emerald-400" />
+            <span>Trạng Thái Trực Tuyến</span>
+          </h3>
+          <div className="h-52">
+            {statusPieData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={statusPieData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={45}
+                    outerRadius={70}
+                    dataKey="value"
+                    label={({ name, value }) => `${name}: ${value}`}
+                    labelLine={false}
+                  >
+                    {statusPieData.map((entry, index) => (
+                      <Cell key={index} fill={entry.fill} />
+                    ))}
+                  </Pie>
+                  <Tooltip content={<CustomTooltip />} />
+                </PieChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex items-center justify-center text-xs text-ink-faint">Không có dữ liệu</div>
+            )}
+          </div>
+        </div>
+
+        {/* Version Breakdown */}
+        <div className="bg-surface border border-surface-border rounded-2xl p-5 shadow-sm">
+          <h3 className="text-xs font-semibold text-ink-muted uppercase tracking-wider mb-4 flex items-center gap-2">
+            <Package className="w-4 h-4 text-emerald-400" />
+            <span>Phiên Bản Agent (Versions)</span>
+          </h3>
+          <div className="space-y-3.5 pt-1">
+            {Object.entries(versionCounts)
+              .sort(([, a], [, b]) => b - a)
+              .map(([version, count]) => (
+                <div key={version} className="flex items-center justify-between text-xs">
+                  <span className="text-ink font-mono font-medium">{version}</span>
+                  <div className="flex items-center gap-3">
+                    <div className="w-28 bg-surface-muted border border-surface-border rounded-full h-2 overflow-hidden">
+                      <div
+                        className="bg-emerald-400 h-2 rounded-full transition-all"
+                        style={{ width: `${(count / (totalAgents || 1)) * 100}%` }}
+                      />
+                    </div>
+                    <span className="text-xs font-mono text-emerald-400 font-bold w-6 text-right">{count}</span>
                   </div>
                 </div>
               ))}
-            </div>
-          )}
+            {Object.keys(versionCounts).length === 0 && (
+              <p className="text-xs text-ink-faint">Chưa có thông tin phiên bản</p>
+            )}
+          </div>
         </div>
       </div>
-    </>
-  );
+
+      {/* Fleet by Platform List */}
+      <div>
+        <h3 className="text-xs font-semibold text-ink-muted uppercase tracking-wider mb-4 flex items-center gap-2">
+          <Layers className="w-4 h-4 text-emerald-400" />
+          <span>Danh Sách Phân Loại Theo Nền Tảng (Platform)</span>
+        </h3>
+        {isLoading ? (
+          <p className="text-xs text-ink-faint">Đang tải dữ liệu fleet...</p>
+        ) : groups.length === 0 ? (
+          <div className="p-8 text-center text-xs text-ink-muted bg-surface rounded-2xl border border-surface-border">
+            No agents registered
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {groups.map(group => (
+              <div key={`${group.os}/${group.arch}`} className="bg-surface border border-surface-border rounded-2xl overflow-hidden shadow-sm">
+                {/* Platform Header */}
+                <div className="px-5 py-3.5 bg-surface-muted/60 border-b border-surface-border flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div
+                      className="w-3 h-3 rounded-full shadow-sm"
+                      style={{ backgroundColor: OS_COLORS[group.os.toLowerCase()] || '#64748b' }}
+                    />
+                    <h4 className="text-sm font-bold text-ink">
+                      {displayOS(group.os)} / {group.arch}
+                    </h4>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-surface border border-surface-border text-ink-muted font-mono">
+                      {group.agents.length} agent{group.agents.length !== 1 ? 's' : ''}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-3 text-xs font-semibold">
+                    <span className="text-emerald-400">{group.online} online</span>
+                    {group.offline > 0 && <span className="text-red-400">{group.offline} offline</span>}
+                  </div>
+                </div>
+
+                {/* Agents List under this Platform */}
+                <div className="divide-y divide-surface-border/50">
+                  {group.agents.map(agent => (
+                    <div
+                      key={agent.id}
+                      onClick={() => navigate(`/agents/${agent.id}`)}
+                      className="px-5 py-3.5 flex items-center justify-between hover:bg-surface-muted/60 cursor-pointer transition-colors group"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className={`w-2.5 h-2.5 rounded-full ${agent.status === 'Online' ? 'bg-emerald-400 shadow-sm shadow-emerald-400/50 animate-pulse' : 'bg-red-400'}`} />
+                        <div>
+                          <div className="text-sm font-bold text-ink group-hover:text-emerald-400 transition-colors">
+                            {agent.name || agent.hostname}
+                          </div>
+                          <div className="text-xs text-ink-muted font-mono">{agent.ip_address || agent.id}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        {agent.version && (
+                          <span className="text-xs text-ink-muted font-mono bg-surface-muted px-2 py-0.5 rounded border border-surface-border">
+                            v{agent.version}
+                          </span>
+                        )}
+                        <StatusBadge status={agent.status} />
+                        <ChevronRight className="w-4 h-4 text-ink-faint group-hover:text-emerald-400 transition-colors" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  </>
+);
 }

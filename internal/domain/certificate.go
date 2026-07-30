@@ -174,9 +174,9 @@ const (
 // "use this default."
 func DefaultAlertChannels() map[string][]string {
 	return map[string][]string{
-		AlertSeverityInformational: {string(NotificationChannelEmail)},
-		AlertSeverityWarning:       {string(NotificationChannelEmail)},
-		AlertSeverityCritical:      {string(NotificationChannelEmail)},
+		AlertSeverityInformational: {string(NotificationChannelWebhook)},
+		AlertSeverityWarning:       {string(NotificationChannelWebhook)},
+		AlertSeverityCritical:      {string(NotificationChannelWebhook)},
 	}
 }
 
@@ -240,7 +240,7 @@ func IsValidAlertSeverityTier(tier string) bool {
 // site to defensively drop off-enum values that survived a migration.
 func IsValidNotificationChannel(channel string) bool {
 	switch NotificationChannel(channel) {
-	case NotificationChannelEmail, NotificationChannelWebhook,
+	case NotificationChannelWebhook,
 		NotificationChannelSlack, NotificationChannelTeams,
 		NotificationChannelPagerDuty, NotificationChannelOpsGenie:
 		return true

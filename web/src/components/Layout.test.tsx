@@ -156,7 +156,7 @@ describe('Layout — Fix 11 UsersPage nav entry', () => {
     // The accessible name doubles as the operator-facing label and is what
     // future testing-library `getByRole('link', { name: /Users/i })` queries
     // will key off; pin it so a label rename surfaces in the diff.
-    expect(link.textContent).toContain('Users');
+    expect(link.textContent).toMatch(/Users|Người dùng/i);
   });
 
   it('the Users link points at /auth/users', () => {
@@ -171,7 +171,7 @@ describe('Layout — Fix 11 UsersPage nav entry', () => {
 
   it('the Users link sits adjacent to the Sessions link (federated-identity grouping)', () => {
     renderLayout();
-    const sessions = screen.getByRole('link', { name: /Sessions/i });
+    const sessions = screen.getByRole('link', { name: /Sessions|Phiên làm việc/i });
     const users = screen.getByTestId('nav-auth-users');
     // DOM order: Sessions immediately precedes Users. The placement matters
     // for the operator's mental model — both surfaces operate on the

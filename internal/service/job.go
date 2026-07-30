@@ -385,6 +385,14 @@ func (s *JobService) RetryFailedJobs(ctx context.Context, maxRetries int) error 
 			continue
 		}
 
+		lastRun := job.StartedAt
+		if lastRun == nil {
+			lastRun = &job.CreatedAt
+		}
+		if time.Since(*lastRun) < time.Minute {
+			continue
+		}
+
 		// Reset status to pending for retry
 		if err := s.jobRepo.UpdateStatus(ctx, job.ID, domain.JobStatusPending, ""); err != nil {
 			s.logger.Error("failed to reset job status for retry",

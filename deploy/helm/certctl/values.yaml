@@ -195,24 +195,7 @@ server:
     level: info  # debug, info, warn, error
     format: json  # json or text
 
-  # SMTP configuration for email notifications (optional)
-  smtp:
-    enabled: false
-    host: ""
-    port: 587
-    username: ""
-    password: ""
-    fromAddress: ""
-    useTLS: true
 
-  # Certificate digest digest (periodic email summary)
-  digest:
-    enabled: false
-    interval: "24h"
-    recipients: []
-    # Example:
-    # - admin@example.com
-    # - ops@example.com
 
   # Enrollment over Secure Transport (EST) configuration
   est:

@@ -37,18 +37,25 @@ func NewUserRepository(db *sql.DB) *UserRepository {
 // re-elevated them. Adding the column to userColumns + scanUser
 // closes the read leg; service.go's upsertUser closes the enforce leg.
 const userColumns = `id, tenant_id, email, display_name, oidc_subject,
-		oidc_provider_id, last_login_at, webauthn_credentials,
+		oidc_provider_id, password_hash, last_login_at, webauthn_credentials,
 		created_at, updated_at, deactivated_at`
 
 func scanUser(row interface{ Scan(...interface{}) error }) (*userdomain.User, error) {
 	var u userdomain.User
 	var deactivatedAt sql.NullTime
+	var oidcSub, oidcProv sql.NullString
 	if err := row.Scan(
-		&u.ID, &u.TenantID, &u.Email, &u.DisplayName, &u.OIDCSubject,
-		&u.OIDCProviderID, &u.LastLoginAt, &u.WebAuthnCredentials,
+		&u.ID, &u.TenantID, &u.Email, &u.DisplayName, &oidcSub,
+		&oidcProv, &u.PasswordHash, &u.LastLoginAt, &u.WebAuthnCredentials,
 		&u.CreatedAt, &u.UpdatedAt, &deactivatedAt,
 	); err != nil {
 		return nil, err
+	}
+	if oidcSub.Valid {
+		u.OIDCSubject = oidcSub.String
+	}
+	if oidcProv.Valid {
+		u.OIDCProviderID = oidcProv.String
 	}
 	if deactivatedAt.Valid {
 		t := deactivatedAt.Time
@@ -106,11 +113,11 @@ func (r *UserRepository) Create(ctx context.Context, u *userdomain.User) error {
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO users (
 			id, tenant_id, email, display_name, oidc_subject,
-			oidc_provider_id, last_login_at, webauthn_credentials,
+			oidc_provider_id, password_hash, last_login_at, webauthn_credentials,
 			deactivated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		) VALUES ($1, $2, $3, $4, NULLIF($5, ''), NULLIF($6, ''), $7, $8, $9, $10)`,
 		u.ID, u.TenantID, u.Email, u.DisplayName, u.OIDCSubject,
-		u.OIDCProviderID, u.LastLoginAt, u.WebAuthnCredentials,
+		u.OIDCProviderID, u.PasswordHash, u.LastLoginAt, u.WebAuthnCredentials,
 		deactivatedAt)
 	if err != nil {
 		var pqErr *pq.Error
@@ -142,12 +149,13 @@ func (r *UserRepository) Update(ctx context.Context, u *userdomain.User) error {
 		UPDATE users SET
 			email = $2,
 			display_name = $3,
-			last_login_at = $4,
-			webauthn_credentials = $5,
-			deactivated_at = $6,
+			password_hash = $4,
+			last_login_at = $5,
+			webauthn_credentials = $6,
+			deactivated_at = $7,
 			updated_at = NOW()
 		WHERE id = $1`,
-		u.ID, u.Email, u.DisplayName, u.LastLoginAt, u.WebAuthnCredentials, deactivatedAt)
+		u.ID, u.Email, u.DisplayName, u.PasswordHash, u.LastLoginAt, u.WebAuthnCredentials, deactivatedAt)
 	if err != nil {
 		return fmt.Errorf("users update: %w", err)
 	}
@@ -214,4 +222,22 @@ func (r *UserRepository) ListDeactivatedBefore(ctx context.Context, threshold ti
 		out = append(out, u)
 	}
 	return out, rows.Err()
+}
+
+// GetByEmail is the lookup at login time for local users.
+// Returns ErrUserNotFound if no row matches the email within the tenant.
+func (r *UserRepository) GetByEmail(ctx context.Context, tenantID, email string) (*userdomain.User, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT `+userColumns+`
+		FROM users
+		WHERE tenant_id = $1 AND email = $2`,
+		tenantID, email)
+	u, err := scanUser(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, repository.ErrUserNotFound
+		}
+		return nil, fmt.Errorf("users get_by_email: %w", err)
+	}
+	return u, nil
 }

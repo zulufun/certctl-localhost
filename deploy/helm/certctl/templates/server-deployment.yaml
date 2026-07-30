@@ -167,33 +167,7 @@ spec:
                   key: est-profile-id
             {{- end }}
             {{- end }}
-            {{- if .Values.server.smtp.enabled }}
-            - name: CERTCTL_SMTP_HOST
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ include "certctl.fullname" . }}-server
-                  key: smtp-host
-            - name: CERTCTL_SMTP_PORT
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ include "certctl.fullname" . }}-server
-                  key: smtp-port
-            - name: CERTCTL_SMTP_USERNAME
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ include "certctl.fullname" . }}-server
-                  key: smtp-username
-            - name: CERTCTL_SMTP_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "certctl.fullname" . }}-server
-                  key: smtp-password
-            - name: CERTCTL_SMTP_FROM_ADDRESS
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ include "certctl.fullname" . }}-server
-                  key: smtp-from-address
-            {{- end }}
+
             {{- if .Values.server.issuer.acme.enabled }}
             - name: CERTCTL_ACME_DIRECTORY_URL
               valueFrom:

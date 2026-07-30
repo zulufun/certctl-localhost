@@ -80,12 +80,37 @@ func TestUser_Validate_RejectsEmptyOIDCSubject(t *testing.T) {
 }
 
 func TestUser_Validate_RejectsInvalidOIDCProviderID(t *testing.T) {
-	for _, bad := range []string{"", "okta-prod", "OP-okta-prod", "provider-okta"} {
+	for _, bad := range []string{"okta-prod", "OP-okta-prod", "provider-okta"} {
 		u := validUser()
 		u.OIDCProviderID = bad
 		if err := u.Validate(); !errors.Is(err, ErrUserInvalidProviderID) {
 			t.Errorf("provider=%q: err = %v; want ErrUserInvalidProviderID", bad, err)
 		}
+	}
+}
+
+func TestUser_Validate_LocalUser(t *testing.T) {
+	u := validUser()
+	u.OIDCSubject = ""
+	u.OIDCProviderID = ""
+	if err := u.Validate(); err != nil {
+		t.Errorf("validate local user: %v", err)
+	}
+}
+
+func TestUser_Validate_MixedOIDCLocal(t *testing.T) {
+	u := validUser()
+	u.OIDCSubject = "user"
+	u.OIDCProviderID = ""
+	if err := u.Validate(); !errors.Is(err, ErrUserInvalidProviderID) {
+		t.Errorf("expected ErrUserInvalidProviderID for mixed OIDC fields, got: %v", err)
+	}
+	
+	u = validUser()
+	u.OIDCSubject = ""
+	u.OIDCProviderID = "op-123"
+	if err := u.Validate(); !errors.Is(err, ErrUserEmptyOIDCSubject) {
+		t.Errorf("expected ErrUserEmptyOIDCSubject for mixed OIDC fields, got: %v", err)
 	}
 }
 

@@ -1,0 +1,102 @@
+[Tue 07/14/2026  2:45:34.87] === certctl Agent Install Start === 
+[Tue 07/14/2026  2:45:34.87] Computer: WIN-TMHQMPDLGM8 
+[Tue 07/14/2026  2:45:34.89] Agent ID: WIN-TMHQMPDLGM8 
+[Tue 07/14/2026  2:45:34.91] Server  : https://10.1.0.12:8443 
+ 
+[OK] Quyen Administrator da xac nhan 
+[OK] Kiem tra file: certctl-agent.exe, winsw.exe 
+[INFO] Dang dung service cu... 
+2026-07-14 02:45:38,910 INFO  - Uninstalling service 'certctl Agent - Certificate Lifecycle Management (certctl-agent)'...
+2026-07-14 02:45:38,919 INFO  - Service 'certctl Agent - Certificate Lifecycle Management (certctl-agent)' was uninstalled successfully.
+[OK] Da xoa service cu 
+[OK] Tao thu muc: C:\Program Files\certctl-agent, C:\ProgramData\certctl 
+[OK] Copy certctl-agent.exe, winsw.exe 
+[OK] Copy server-ca.crt 
+[OK] Ghi file cau hinh: C:\ProgramData\certctl\agent.env 
+# certctl Agent Configuration - Auto-generated
+# Generated: Tue 07/14/2026  2:45:40.23
+
+CERTCTL_AGENT_ID=WIN-TMHQMPDLGM8
+CERTCTL_AGENT_NAME=WIN-TMHQMPDLGM8
+
+CERTCTL_SERVER_URL=https://10.1.0.12:8443
+CERTCTL_API_KEY=demo-secret-123
+
+CERTCTL_SERVER_CA_BUNDLE_PATH=C:\ProgramData\certctl\server-ca.crt
+CERTCTL_SERVER_TLS_INSECURE_SKIP_VERIFY=true
+
+CERTCTL_KEY_DIR=C:\ProgramData\certctl\keys
+CERTCTL_KEYGEN_MODE=agent
+
+CERTCTL_DISCOVERY_DIRS=C:\inetpub\wwwroot,C:\inetpub\certs,C:\ssl
+
+CERTCTL_LOG_LEVEL=info
+[OK] Tao file XML WinSW 
+2026-07-14 02:45:42,175 INFO  - Installing service 'certctl Agent - Certificate Lifecycle Management (certctl-agent)'...
+2026-07-14 02:45:42,212 INFO  - Service 'certctl Agent - Certificate Lifecycle Management (certctl-agent)' was installed successfully.
+[OK] Dang ky service thanh cong 
+
+SERVICE_NAME: certctl-agent 
+        TYPE               : 10  WIN32_OWN_PROCESS  
+        STATE              : 2  START_PENDING 
+                                (NOT_STOPPABLE, NOT_PAUSABLE, IGNORES_SHUTDOWN)
+        WIN32_EXIT_CODE    : 0  (0x0)
+        SERVICE_EXIT_CODE  : 0  (0x0)
+        CHECKPOINT         : 0x0
+        WAIT_HINT          : 0x7d0
+        PID                : 5764
+        FLAGS              : 
+[OK] Service RUNNING 
+[Tue 07/14/2026  2:45:47.19] === Install Completed === 
+[INFO] Dang tu dong dang ky voi server https://10.1.0.12:8443... 
+[WARN] Dang ky that bai. Dung ID/API key mac dinh. 
+[Tue 07/14/2026  2:59:46.78] === certctl Agent Install Start === 
+[Tue 07/14/2026  2:59:46.79] Computer: WIN-TMHQMPDLGM8 
+[Tue 07/14/2026  2:59:46.81] Agent ID: WIN-TMHQMPDLGM8 
+[Tue 07/14/2026  2:59:46.83] Server  : https://10.1.0.12:8443 
+ 
+[OK] Quyen Administrator da xac nhan 
+[OK] Kiem tra file: certctl-agent.exe, winsw.exe 
+[INFO] Dang dung service cu... 
+2026-07-14 02:59:49,827 INFO  - Uninstalling service 'certctl Agent - Certificate Lifecycle Management (certctl-agent)'...
+2026-07-14 02:59:49,835 INFO  - Service 'certctl Agent - Certificate Lifecycle Management (certctl-agent)' was uninstalled successfully.
+[OK] Da xoa service cu 
+[OK] Tao thu muc: C:\Program Files\certctl-agent, C:\ProgramData\certctl 
+[OK] Copy certctl-agent.exe, winsw.exe 
+[OK] Copy server-ca.crt 
+[OK] Ghi file cau hinh: C:\ProgramData\certctl\agent.env 
+# certctl Agent Configuration - Auto-generated
+# Generated: Tue 07/14/2026  2:59:51.25
+
+CERTCTL_AGENT_ID=WIN-TMHQMPDLGM8
+CERTCTL_AGENT_NAME=WIN-TMHQMPDLGM8
+
+CERTCTL_SERVER_URL=https://10.1.0.12:8443
+CERTCTL_API_KEY=demo-secret-123
+
+CERTCTL_SERVER_CA_BUNDLE_PATH=C:\ProgramData\certctl\server-ca.crt
+CERTCTL_SERVER_TLS_INSECURE_SKIP_VERIFY=true
+
+CERTCTL_KEY_DIR=C:\ProgramData\certctl\keys
+CERTCTL_KEYGEN_MODE=agent
+
+CERTCTL_DISCOVERY_DIRS=C:\inetpub\wwwroot,C:\inetpub\certs,C:\ssl
+
+CERTCTL_LOG_LEVEL=info
+[OK] Tao file XML WinSW 
+2026-07-14 02:59:53,409 INFO  - Installing service 'certctl Agent - Certificate Lifecycle Management (certctl-agent)'...
+2026-07-14 02:59:53,457 INFO  - Service 'certctl Agent - Certificate Lifecycle Management (certctl-agent)' was installed successfully.
+[OK] Dang ky service thanh cong 
+
+SERVICE_NAME: certctl-agent 
+        TYPE               : 10  WIN32_OWN_PROCESS  
+        STATE              : 2  START_PENDING 
+                                (NOT_STOPPABLE, NOT_PAUSABLE, IGNORES_SHUTDOWN)
+        WIN32_EXIT_CODE    : 0  (0x0)
+        SERVICE_EXIT_CODE  : 0  (0x0)
+        CHECKPOINT         : 0x0
+        WAIT_HINT          : 0x7d0
+        PID                : 7740
+        FLAGS              : 
+[OK] Service RUNNING 
+[Tue 07/14/2026  2:59:59.22] === Install Completed === 

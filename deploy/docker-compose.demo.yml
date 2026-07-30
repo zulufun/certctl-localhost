@@ -116,7 +116,7 @@ services:
       # 180-day simulated history seed applied at boot.
       CERTCTL_DEMO_SEED: "true"
 
-  certctl-agent:
+  agent-01-nginx:
     environment:
       # Pre-seeded by migrations/seed_demo.sql; the bundled agent
       # connects with these creds and the demo-mode synthetic admin

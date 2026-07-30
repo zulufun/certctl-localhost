@@ -51,6 +51,8 @@ func (s *stubFullUserRepo) GetByOIDCSubject(_ context.Context, _, _ string) (*us
 	return nil, repository.ErrUserNotFound
 }
 
+func (s *stubFullUserRepo) GetByEmail(ctx context.Context, tenantID, email string) (*userdomain.User, error) { return nil, repository.ErrUserNotFound }
+
 func (s *stubFullUserRepo) Create(_ context.Context, u *userdomain.User) error {
 	s.rows[u.ID] = u
 	return nil

@@ -75,7 +75,6 @@ const (
 type NotificationChannel string
 
 const (
-	NotificationChannelEmail     NotificationChannel = "Email"
 	NotificationChannelWebhook   NotificationChannel = "Webhook"
 	NotificationChannelSlack     NotificationChannel = "Slack"
 	NotificationChannelTeams     NotificationChannel = "Teams"

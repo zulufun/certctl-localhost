@@ -1,0 +1,131 @@
+PS C:\agent-windows-iis> .\install-silent.bat
+==================================================
+  certctl Agent Installer - Windows IIS Edition
+  Ch? d?: OFFLINE (không c?n internet)
+==================================================
+
+
+=== C?u hình k?t n?i certctl Server ===
+
+  Nh?p tên Agent (Enter d? dùng m?c d?nh: win-tmhqmpdlgm8):
+  Nh?p Agent ID (Enter d? dùng m?c d?nh: win-tmhqmpdlgm8):
+  [T? d?ng] Tìm th?y server-ca.crt trong b? cài, s? s? d?ng file này.
+  Thu m?c scan certificates (Enter d? dùng m?c d?nh: C:\inetpub\wwwroot,C:\inetpub\certs):
+T?o thu m?c cài d?t...
+  [OK] C:\Program Files\certctl-agent
+  [OK] C:\ProgramData\certctl
+  [OK] C:\ProgramData\certctl\keys (quy?n truy c?p gi?i h?n)
+  [OK] C:\ProgramData\certctl\logs
+Cài d?t binary agent...
+  [OK] Binary: C:\Program Files\certctl-agent\certctl-agent.exe
+  [OK] CA certificate: C:\ProgramData\certctl\server-ca.crt
+Ghi file c?u hình...
+  [OK] Config: C:\ProgramData\certctl\agent.env (quy?n truy c?p gi?i h?n)
+Ðang ký Windows Service...
+  Service cu t?n t?i, dang xóa...
+  [OK] Service dã dang ký: certctl-agent (qua WinSW)
+  [OK] Kh?i d?ng t? d?ng: Có
+  [OK] Kh?i d?ng l?i khi l?i: Có (10s / 30s / 60s)
+Kh?i d?ng certctl-agent service...
+  [OK] Service dang ch?y!
+
+==================================================
+  certctl Agent - Cài d?t hoàn t?t!
+==================================================
+
+Thông tin cài d?t:
+  Agent ID    : win-tmhqmpdlgm8
+  Agent Name  : win-tmhqmpdlgm8
+  Server URL  : https://10.1.0.12:8443
+  Tr?ng thái  : Running
+
+Ðu?ng d?n:
+  Binary      : C:\Program Files\certctl-agent\certctl-agent.exe
+  Config      : C:\ProgramData\certctl\agent.env
+  Keys        : C:\ProgramData\certctl\keys
+  Logs        : C:\ProgramData\certctl\logs
+
+L?nh qu?n lý:
+  Xem tr?ng thái : Get-Service 'certctl-agent'
+  Xem logs       : Get-WinEvent -ProviderName 'certctl-agent' -MaxEvents 20
+  Xem log don gi?n: Get-EventLog -LogName Application -Newest 20 | Where Source -eq 'certctl-agent'
+  D?ng service   : Stop-Service 'certctl-agent'
+  Kh?i d?ng l?i  : Restart-Service 'certctl-agent'
+  G? cài d?t    : .\install-agent.ps1 -Uninstall
+
+Bu?c ti?p theo:
+  1. Truy c?p Dashboard: https://10.1.0.12:8443
+  2. Vào menu 'Agents' - Agent 'win-tmhqmpdlgm8' s? xu?t hi?n trong ~30 giây
+  3. C?u hình Deployment Target d? deploy cert lên IIS
+
+Press any key to continue . . .
+PS C:\agent-windows-iis> Get-Service 'certctl-agent'
+
+Status   Name               DisplayName
+------   ----               -----------
+Running  certctl-agent      certctl Agent - Certificate Lifecyc...
+
+
+PS C:\agent-windows-iis>  Get-WinEvent -ProviderName 'certctl-agent' -MaxEvents 20
+
+
+   ProviderName: certctl-agent
+
+TimeCreated                      Id LevelDisplayName Message
+-----------                      -- ---------------- -------
+7/14/2026 1:28:10 AM              0 Information      Service started successfully.
+7/14/2026 1:28:10 AM              0 Information      Failed to move :C:\Program Files\certctl-agent\certctl-agent-se...
+7/14/2026 1:28:10 AM              0 Information      Failed to move :C:\Program Files\certctl-agent\certctl-agent-se...
+7/14/2026 1:28:09 AM              0 Information      Starting C:\Program Files\certctl-agent\certctl-agent.exe
+
+
+PS C:\agent-windows-iis>  Get-EventLog -LogName Application -Newest 20 | Where Source -eq 'certctl-agent'
+
+   Index Time          EntryType   Source                 InstanceID Message
+   ----- ----          ---------   ------                 ---------- -------
+  442355 Jul 14 01:28  Information certctl-agent                   0 Service started successfully.
+  442354 Jul 14 01:28  Information certctl-agent                   0 Failed to move :C:\Program Files\certctl-agent\...
+  442353 Jul 14 01:28  Information certctl-agent                   0 Failed to move :C:\Program Files\certctl-agent\...
+  442352 Jul 14 01:28  Information certctl-agent                   0 Starting C:\Program Files\certctl-agent\certctl...
+
+
+PS C:\agent-windows-iis> Restart-Service 'certctl-agent'
+PS C:\agent-windows-iis>  Get-EventLog -LogName Application -Newest 20 | Where Source -eq 'certctl-agent'
+
+   Index Time          EntryType   Source                 InstanceID Message
+   ----- ----          ---------   ------                 ---------- -------
+  442360 Jul 14 01:32  Information certctl-agent                   0 Service started successfully.
+  442359 Jul 14 01:32  Information certctl-agent                   0 Starting C:\Program Files\certctl-agent\certctl-agent.exe
+  442358 Jul 14 01:32  Information certctl-agent                   0 Service stopped successfully.
+  442357 Jul 14 01:32  Information certctl-agent                   0 Child process [5804 - C:\Program Files\certctl-agent\certctl-agent.exe ] terminated with 0
+  442356 Jul 14 01:32  Information certctl-agent                   0 Stopping certctl-agent
+  442355 Jul 14 01:28  Information certctl-agent                   0 Service started successfully.
+  442354 Jul 14 01:28  Information certctl-agent                   0 Failed to move :C:\Program Files\certctl-agent\certctl-agent-service.err.log to C:\Program Files\certctl-agent\certctl-agent-service.e...
+  442353 Jul 14 01:28  Information certctl-agent                   0 Failed to move :C:\Program Files\certctl-agent\certctl-agent-service.out.log to C:\Program Files\certctl-agent\certctl-agent-service.o...
+  442352 Jul 14 01:28  Information certctl-agent                   0 Starting C:\Program Files\certctl-agent\certctl-agent.exe
+
+
+PS C:\agent-windows-iis> Get-Service 'certctl-agent'
+
+Status   Name               DisplayName
+------   ----               -----------
+Running  certctl-agent      certctl Agent - Certificate Lifecyc...
+
+
+PS C:\agent-windows-iis>  Get-WinEvent -ProviderName 'certctl-agent' -MaxEvents 20
+
+
+   ProviderName: certctl-agent
+
+TimeCreated                      Id LevelDisplayName Message
+-----------                      -- ---------------- -------
+7/14/2026 1:32:50 AM              0 Information      Service started successfully.
+7/14/2026 1:32:50 AM              0 Information      Starting C:\Program Files\certctl-agent\certctl-agent.exe
+7/14/2026 1:32:49 AM              0 Information      Service stopped successfully.
+7/14/2026 1:32:49 AM              0 Information      Child process [5804 - C:\Program Files\certctl-agent\certctl-agent.exe ] terminated with 0
+7/14/2026 1:32:49 AM              0 Information      Stopping certctl-agent
+7/14/2026 1:28:10 AM              0 Information      Service started successfully.
+7/14/2026 1:28:10 AM              0 Information      Failed to move :C:\Program Files\certctl-agent\certctl-agent-service.err.log to C:\Program Files\certctl-agent\certctl-agent-service.err.log.old becau...
+7/14/2026 1:28:10 AM              0 Information      Failed to move :C:\Program Files\certctl-agent\certctl-agent-service.out.log to C:\Program Files\certctl-agent\certctl-agent-service.out.log.old becau...
+7/14/2026 1:28:09 AM              0 Information      Starting C:\Program Files\certctl-agent\certctl-agent.exe
+

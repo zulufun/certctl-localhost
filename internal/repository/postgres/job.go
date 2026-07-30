@@ -222,9 +222,14 @@ func (r *JobRepository) UpdateStatus(ctx context.Context, id string, status doma
 		lastError = &errMsg
 	}
 
-	result, err := r.db.ExecContext(ctx, `
-		UPDATE jobs SET status = $1, last_error = $2 WHERE id = $3
-	`, status, lastError, id)
+	var query string
+	if status == domain.JobStatusCompleted || status == domain.JobStatusFailed || status == domain.JobStatusCancelled {
+		query = `UPDATE jobs SET status = $1, last_error = $2, completed_at = NOW() WHERE id = $3`
+	} else {
+		query = `UPDATE jobs SET status = $1, last_error = $2 WHERE id = $3`
+	}
+
+	result, err := r.db.ExecContext(ctx, query, status, lastError, id)
 
 	if err != nil {
 		return fmt.Errorf("failed to update job status: %w", err)
@@ -307,7 +312,15 @@ func (r *JobRepository) ClaimPendingJobs(ctx context.Context, jobType domain.Job
 		SELECT id, type, certificate_id, target_id, agent_id, status, attempts, max_attempts,
 		       last_error, scheduled_at, started_at, completed_at, created_at
 		FROM jobs
-		WHERE status = $1`
+		WHERE status = $1
+		  AND NOT (
+		    type = 'Deployment' AND (
+		      agent_id IS NOT NULL 
+		      OR EXISTS (
+		        SELECT 1 FROM deployment_targets dt WHERE dt.id = jobs.target_id AND dt.agent_id IS NOT NULL
+		      )
+		    )
+		  )`
 	args := []interface{}{domain.JobStatusPending}
 	if jobType != "" {
 		query += ` AND type = $2`
@@ -359,7 +372,7 @@ func (r *JobRepository) ClaimPendingJobs(ctx context.Context, jobType domain.Job
 		placeholders = append(placeholders, fmt.Sprintf("$%d", i+2)...)
 	}
 	updateQuery := fmt.Sprintf(
-		`UPDATE jobs SET status = $1 WHERE id IN (%s)`,
+		`UPDATE jobs SET status = $1, attempts = attempts + 1, started_at = CURRENT_TIMESTAMP WHERE id IN (%s)`,
 		string(placeholders),
 	)
 	updateArgs := append([]interface{}{domain.JobStatusRunning}, ids...)
@@ -583,7 +596,7 @@ func (r *JobRepository) ClaimPendingByAgentID(ctx context.Context, agentID strin
 			placeholders = append(placeholders, fmt.Sprintf("$%d", i+2)...)
 		}
 		updateQuery := fmt.Sprintf(
-			`UPDATE jobs SET status = $1 WHERE id IN (%s)`,
+			`UPDATE jobs SET status = $1, attempts = attempts + 1, started_at = CURRENT_TIMESTAMP WHERE id IN (%s)`,
 			string(placeholders),
 		)
 		updateArgs := append([]interface{}{domain.JobStatusRunning}, ids...)

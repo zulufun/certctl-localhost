@@ -281,7 +281,7 @@ function CreateCertificateModal({ onClose, onSuccess }: { onClose: () => void; o
             }
             className="btn btn-primary text-sm disabled:opacity-50"
           >
-            {mutation.isPending ? 'Creating...' : 'Create Certificate'}
+            {mutation.isPending ? 'Đang tạo...' : 'Tạo chứng chỉ'}
           </button>
         </div>
       </div>
@@ -572,7 +572,7 @@ export default function CertificatesPage() {
   const columns: Column<Certificate>[] = [
     {
       key: 'name',
-      label: 'Certificate',
+      label: 'Chứng chỉ',
       render: (c) => (
         <div>
           <div className="font-medium text-ink">{c.common_name}</div>
@@ -580,10 +580,10 @@ export default function CertificatesPage() {
         </div>
       ),
     },
-    { key: 'status', label: 'Status', render: (c) => <StatusBadge status={c.status} /> },
+    { key: 'status', label: 'Trạng thái', render: (c) => <StatusBadge status={c.status} /> },
     {
       key: 'expires',
-      label: 'Expires',
+      label: 'Hết hạn',
       render: (c) => {
         const days = daysUntil(c.expires_at);
         return (
@@ -594,10 +594,10 @@ export default function CertificatesPage() {
         );
       },
     },
-    { key: 'last_renewal', label: 'Last Renewal', render: (c) => <span className="text-xs text-ink-muted">{c.last_renewal_at ? formatDate(c.last_renewal_at) : '—'}</span> },
-    { key: 'last_deploy', label: 'Last Deploy', render: (c) => <span className="text-xs text-ink-muted">{c.last_deployment_at ? formatDate(c.last_deployment_at) : '—'}</span> },
-    { key: 'issuer', label: 'Issuer', render: (c) => <span className="text-ink-muted text-xs">{c.issuer_id}</span> },
-    { key: 'owner', label: 'Owner', render: (c) => <span className="text-ink-muted text-xs">{c.owner_id}</span> },
+    { key: 'last_renewal', label: 'Gia hạn lần cuối', render: (c) => <span className="text-xs text-ink-muted">{c.last_renewal_at ? formatDate(c.last_renewal_at) : '—'}</span> },
+    { key: 'last_deploy', label: 'Triển khai lần cuối', render: (c) => <span className="text-xs text-ink-muted">{c.last_deployment_at ? formatDate(c.last_deployment_at) : '—'}</span> },
+    { key: 'issuer', label: 'Nhà cấp phát', render: (c) => <span className="text-ink-muted text-xs">{c.issuer_id}</span> },
+    { key: 'owner', label: 'Chủ sở hữu', render: (c) => <span className="text-ink-muted text-xs">{c.owner_id}</span> },
   ];
 
   const selectedArray = Array.from(selectedIds);
@@ -606,11 +606,11 @@ export default function CertificatesPage() {
   return (
     <>
       <PageHeader
-        title="Certificates"
-        subtitle={data ? `${data.total} certificates` : undefined}
+        title="Chứng chỉ"
+        subtitle={data ? `${data.total} chứng chỉ` : undefined}
         action={
           <button onClick={() => setShowCreate(true)} className="btn btn-primary text-xs">
-            + New Certificate
+            + Chứng chỉ mới
           </button>
         }
       />

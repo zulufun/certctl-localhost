@@ -250,6 +250,10 @@ func (s *stubUserRepo) GetByOIDCSubject(_ context.Context, providerID, subject s
 }
 
 func (s *stubUserRepo) Create(_ context.Context, _ *userdomain.User) error { return nil }
+
+func (s *stubUserRepo) GetByEmail(ctx context.Context, tenantID, email string) (*userdomain.User, error) {
+	return nil, repository.ErrUserNotFound
+}
 func (s *stubUserRepo) Update(_ context.Context, _ *userdomain.User) error { return nil }
 func (s *stubUserRepo) ListAll(_ context.Context, _ string) ([]*userdomain.User, error) {
 	return nil, nil

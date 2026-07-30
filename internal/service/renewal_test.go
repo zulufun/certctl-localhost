@@ -151,7 +151,7 @@ func TestCheckExpiringCertificates_DeduplicatesAlerts(t *testing.T) {
 		ID:            "notif-existing",
 		CertificateID: &cert.ID,
 		Type:          domain.NotificationTypeExpirationWarning,
-		Channel:       domain.NotificationChannelEmail,
+		Channel:       domain.NotificationChannelWebhook,
 		Recipient:     "owner-1",
 		Message:       "Alert [threshold:7]",
 		Status:        "sent",

@@ -740,6 +740,7 @@ func (h CertificateHandler) HandleOCSP(w http.ResponseWriter, r *http.Request) {
 			ErrorWithRequestID(w, http.StatusNotImplemented, errMsg, requestID)
 			return
 		}
+		slog.Error("Failed to generate OCSP response", "issuer", issuerID, "serial", serialHex, "err", err)
 		ErrorWithRequestID(w, http.StatusInternalServerError, "Failed to generate OCSP response", requestID)
 		return
 	}

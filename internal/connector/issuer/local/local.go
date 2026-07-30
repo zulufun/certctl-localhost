@@ -336,6 +336,10 @@ func (c *Connector) ValidateConfig(ctx context.Context, rawConfig json.RawMessag
 		return fmt.Errorf("invalid local CA config: %w", err)
 	}
 
+	if cfg.ValidityDays == 0 {
+		cfg.ValidityDays = 90
+	}
+
 	if cfg.ValidityDays < 1 {
 		return fmt.Errorf("validity_days must be at least 1")
 	}

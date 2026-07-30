@@ -90,7 +90,7 @@ describe('AgentsPage — T-1 page coverage', () => {
     });
     // The Fresh-Agent row has no status and no last_heartbeat_at;
     // heartbeatStatus() falls through to 'Offline'.
-    expect(screen.getAllByText(/Offline/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Offline|Ngoại tuyến/i).length).toBeGreaterThan(0);
   });
 
   it('lazy-fetches the retired agents only when the retired tab is active', async () => {

@@ -1,0 +1,9 @@
+# Apache Deployment Target Example
+name: Apache Web Server
+type: Apache
+description: Example Apache target configured with certctl
+properties:
+  install_path: /etc/apache2/ssl
+  restart_command: systemctl reload apache2
+  cert_file: /etc/apache2/ssl/cert.pem
+  key_file: /etc/apache2/ssl/key.pem

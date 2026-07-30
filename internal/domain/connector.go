@@ -61,6 +61,7 @@ type Agent struct {
 	Status          AgentStatus `json:"status"`
 	LastHeartbeatAt *time.Time  `json:"last_heartbeat_at,omitempty"`
 	RegisteredAt    time.Time   `json:"registered_at"`
+	PlaintextAPIKey string      `json:"api_key,omitempty"`
 	// APIKeyHash is the SHA-256 of the agent's plaintext API key,
 	// populated by service.RegisterAgent (`hashAPIKey(apiKey)`) and
 	// consumed by repository.AgentRepository::GetByAPIKey at auth time.

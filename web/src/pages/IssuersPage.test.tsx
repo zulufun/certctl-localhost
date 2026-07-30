@@ -90,8 +90,8 @@ describe('IssuersPage — T-1 page coverage', () => {
     });
     // issuerStatus() returns 'Enabled' or 'Disabled' from the boolean.
     // StatusBadge renders the string verbatim somewhere in each row.
-    expect(screen.getAllByText(/Enabled/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Disabled/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Enabled|Đã kích hoạt/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Disabled|Đã vô hiệu hóa/i).length).toBeGreaterThan(0);
   });
 
   it('clicking Test fires testIssuerConnection with the issuer id', async () => {

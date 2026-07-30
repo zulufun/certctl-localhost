@@ -498,6 +498,16 @@ func main() {
 		bclMaxAge = handler.DefaultBCLVerifierMaxAge
 	}
 	bclReplayRepo := postgres.NewBCLReplayRepository(db)
+	localAuthService := service.NewLocalAuthService(oidcUserRepo)
+	authLocalHandler := handler.NewAuthLocalHandler(
+		localAuthService,
+		auditService,
+		sessionService,
+		handler.SessionCookieAttrs{
+			SameSite: sameSiteMode,
+			Secure:   true,
+		},
+	)
 	authSessionOIDCHandler := handler.NewAuthSessionOIDCHandler(
 		oidcService,
 		sessionService,
@@ -1357,6 +1367,8 @@ func main() {
 		// surface. 13 endpoints across login flow + session management
 		// + OIDC provider CRUD + group-mapping CRUD.
 		AuthSessionOIDC: authSessionOIDCHandler,
+		// AuthLocal — Username/Password login endpoint and User CRUD.
+		AuthLocal: authLocalHandler,
 
 		// AuthBreakglass — Auth Bundle 2 Phase 7.5 break-glass admin
 		// HTTP surface. 4 endpoints (1 public login + 3 admin CRUD).

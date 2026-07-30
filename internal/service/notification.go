@@ -155,7 +155,7 @@ func (s *NotificationService) SendExpirationWarning(ctx context.Context, cert *d
 // per-policy AlertChannels matrix. Rank 4 of the 2026-05-03 Infisical
 // deep-research deliverable.
 func (s *NotificationService) SendThresholdAlert(ctx context.Context, cert *domain.ManagedCertificate, daysUntilExpiry int, threshold int) error {
-	return s.SendThresholdAlertOnChannel(ctx, cert, daysUntilExpiry, threshold, domain.NotificationChannelEmail)
+	return s.SendThresholdAlertOnChannel(ctx, cert, daysUntilExpiry, threshold, domain.NotificationChannelWebhook)
 }
 
 // SendThresholdAlertOnChannel sends an expiration alert for a specific
@@ -224,15 +224,15 @@ func (s *NotificationService) SendThresholdAlertOnChannel(
 }
 
 // HasThresholdNotification checks whether an expiration warning has already
-// been sent for a specific (cert, threshold) pair via the Email channel.
+// been sent for a specific (cert, threshold) pair via the Webhook channel.
 // Preserved for backwards-compat. Equivalent to
-// HasThresholdNotificationOnChannel(ctx, certID, threshold, "Email").
+// HasThresholdNotificationOnChannel(ctx, certID, threshold, "Webhook").
 //
 // New callers driven by the per-policy channel matrix should use
 // HasThresholdNotificationOnChannel directly with the explicit channel —
 // see RenewalService.sendThresholdAlerts.
 func (s *NotificationService) HasThresholdNotification(ctx context.Context, certID string, threshold int) (bool, error) {
-	return s.HasThresholdNotificationOnChannel(ctx, certID, threshold, domain.NotificationChannelEmail)
+	return s.HasThresholdNotificationOnChannel(ctx, certID, threshold, domain.NotificationChannelWebhook)
 }
 
 // HasThresholdNotificationOnChannel reports whether an ExpirationWarning
@@ -294,7 +294,7 @@ func (s *NotificationService) SendRenewalNotification(ctx context.Context, cert 
 		ID:            generateID("notif"),
 		CertificateID: &cert.ID,
 		Type:          notifType,
-		Channel:       domain.NotificationChannelEmail,
+		Channel:       domain.NotificationChannelWebhook,
 		Recipient:     s.resolveRecipient(ctx, cert.OwnerID),
 		Message:       body,
 		Status:        "pending",
@@ -333,7 +333,7 @@ func (s *NotificationService) SendDeploymentNotification(ctx context.Context, ce
 		ID:            generateID("notif"),
 		CertificateID: &cert.ID,
 		Type:          notifType,
-		Channel:       domain.NotificationChannelEmail,
+		Channel:       domain.NotificationChannelWebhook,
 		Recipient:     s.resolveRecipient(ctx, cert.OwnerID),
 		Message:       body,
 		Status:        "pending",
@@ -369,27 +369,7 @@ func (s *NotificationService) SendRevocationNotification(ctx context.Context, ce
 		return fmt.Errorf("failed to create revocation notification: %w", err)
 	}
 
-	// Also send via email channel
-	emailNotif := &domain.NotificationEvent{
-		ID:            generateID("notif"),
-		CertificateID: &cert.ID,
-		Type:          domain.NotificationTypeRevocation,
-		Channel:       domain.NotificationChannelEmail,
-		Recipient:     s.resolveRecipient(ctx, cert.OwnerID),
-		Message:       body,
-		Status:        "pending",
-		CreatedAt:     time.Now(),
-	}
-
-	if err := s.notifRepo.Create(ctx, emailNotif); err != nil {
-		slog.Error("failed to create email revocation notification", "error", err)
-	}
-
-	// Attempt immediate send for both
-	if err := s.sendNotification(ctx, notif); err != nil {
-		slog.Error("failed to send webhook revocation notification", "error", err)
-	}
-	return s.sendNotification(ctx, emailNotif)
+	return s.sendNotification(ctx, notif)
 }
 
 // ProcessPendingNotifications sends all pending notifications in batch.

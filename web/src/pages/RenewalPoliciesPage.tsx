@@ -1,6 +1,17 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
+import {
+  RotateCw,
+  Plus,
+  Zap,
+  Clock,
+  Bell,
+  Edit2,
+  Trash2,
+  X,
+  CheckCircle2,
+} from 'lucide-react';
 import { useTrackedMutation } from '../hooks/useTrackedMutation';
 import {
   getRenewalPolicies,
@@ -14,24 +25,6 @@ import type { Column } from '../components/DataTable';
 import ErrorState from '../components/ErrorState';
 import { formatDateTime } from '../api/utils';
 import type { RenewalPolicy } from '../api/types';
-
-// RenewalPoliciesPage — B-1 master closure (cat-b-4631ca092bee).
-// Pre-B-1 the backend had full CRUD at /api/v1/renewal-policies but
-// there was no GUI page. Operators wanting to edit the seeded
-// `rp-default` policy or create custom `rp-*` policies for short-lived
-// certs had to go through `psql` directly. This page exposes the table
-// + Create + Edit + Delete affordances. Renewal policies are referenced
-// by managed certificates via `renewal_policy_id`; the backend's
-// repository.ErrRenewalPolicyInUse sentinel surfaces a 409 on Delete
-// when a policy still has cert references — surfaced as an alert here.
-//
-// Field set per `internal/domain/certificate.go::RenewalPolicy`:
-//   - renewal_window_days: int (when to start renewal — usually 30)
-//   - auto_renew: bool (whether the scheduler renews automatically)
-//   - max_retries: int
-//   - retry_interval_seconds: int (post-U-3 column rename;
-//     cat-o-retry_interval_unit_mismatch closed)
-//   - alert_thresholds_days: int[] (notification days before expiry)
 
 interface PolicyFormFields {
   name: string;
@@ -64,9 +57,6 @@ function policyToFields(p: RenewalPolicy): PolicyFormFields {
   };
 }
 
-// PolicyFormModal — shared scaffolding for Create + Edit. The only
-// shape difference between the two flows is which mutationFn the
-// caller supplies + the modal title; everything else mirrors.
 interface PolicyFormModalProps {
   title: string;
   initial: PolicyFormFields;
@@ -93,55 +83,69 @@ function PolicyFormModal({ title, initial, isOpen, onClose, onSubmit, isSaving, 
   };
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-surface border border-surface-border rounded p-5 w-full max-w-md shadow-xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-        <h2 className="text-lg font-semibold text-ink mb-4">{title}</h2>
-        {error && <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">{error}</div>}
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-surface border border-surface-border rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between pb-3 border-b border-surface-border">
+          <div className="flex items-center gap-2 font-bold text-sm text-ink">
+            <RotateCw className="w-4 h-4 text-emerald-400" />
+            <span>{title}</span>
+          </div>
+          <button onClick={onClose} className="text-ink-muted hover:text-ink text-xs p-1">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {error && <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-xs text-red-400">{error}</div>}
+
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-ink mb-1">Name *</label>
+            <label className="block text-xs font-semibold text-ink mb-1">Tên Chính Sách (Name) *</label>
             <input
               value={fields.name}
               onChange={e => setFields({ ...fields, name: e.target.value })}
-              className="w-full bg-white border border-surface-border rounded px-3 py-2 text-sm text-ink focus:outline-none focus:border-brand-400"
+              className="w-full bg-surface-muted border border-surface-border rounded-xl px-3 py-2 text-xs text-ink focus:outline-none focus:border-emerald-400"
               placeholder="e.g., Standard 30-day"
               required
             />
           </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-sm font-medium text-ink mb-1">Renewal Window (days)</label>
+              <label className="block text-xs font-semibold text-ink mb-1">Cửa Sổ Tự Đổi (Renewal Window - ngày)</label>
               <input
                 type="number"
                 value={fields.renewal_window_days}
                 onChange={e => setFields({ ...fields, renewal_window_days: Number(e.target.value) })}
-                className="w-full bg-white border border-surface-border rounded px-3 py-2 text-sm text-ink focus:outline-none focus:border-brand-400"
+                className="w-full bg-surface-muted border border-surface-border rounded-xl px-3 py-2 text-xs text-ink focus:outline-none focus:border-emerald-400"
                 min={1}
               />
             </div>
+
             <div>
-              <label className="block text-sm font-medium text-ink mb-1">Max Retries</label>
+              <label className="block text-xs font-semibold text-ink mb-1">Số Lần Thử Lại (Max Retries)</label>
               <input
                 type="number"
                 value={fields.max_retries}
                 onChange={e => setFields({ ...fields, max_retries: Number(e.target.value) })}
-                className="w-full bg-white border border-surface-border rounded px-3 py-2 text-sm text-ink focus:outline-none focus:border-brand-400"
+                className="w-full bg-surface-muted border border-surface-border rounded-xl px-3 py-2 text-xs text-ink focus:outline-none focus:border-emerald-400"
                 min={0}
               />
             </div>
           </div>
+
           <div>
-            <label className="block text-sm font-medium text-ink mb-1">Retry Interval (seconds)</label>
+            <label className="block text-xs font-semibold text-ink mb-1">Khoảng Thời Gian Thử Lại (Retry Interval - giây)</label>
             <input
               type="number"
               value={fields.retry_interval_seconds}
               onChange={e => setFields({ ...fields, retry_interval_seconds: Number(e.target.value) })}
-              className="w-full bg-white border border-surface-border rounded px-3 py-2 text-sm text-ink focus:outline-none focus:border-brand-400"
+              className="w-full bg-surface-muted border border-surface-border rounded-xl px-3 py-2 text-xs text-ink focus:outline-none focus:border-emerald-400"
               min={0}
             />
           </div>
+
           <div>
-            <label className="block text-sm font-medium text-ink mb-1">Alert Thresholds (days, comma-separated)</label>
+            <label className="block text-xs font-semibold text-ink mb-1">Ngưỡng Cảnh Báo Sắp Hết Hạn (ngày, cách nhau dấu phẩy)</label>
             <input
               value={fields.alert_thresholds_days.join(', ')}
               onChange={e => {
@@ -151,23 +155,29 @@ function PolicyFormModal({ title, initial, isOpen, onClose, onSubmit, isSaving, 
                   .filter(n => !isNaN(n));
                 setFields({ ...fields, alert_thresholds_days: parts });
               }}
-              className="w-full bg-white border border-surface-border rounded px-3 py-2 text-sm text-ink focus:outline-none focus:border-brand-400"
+              className="w-full bg-surface-muted border border-surface-border rounded-xl px-3 py-2 text-xs text-ink font-mono focus:outline-none focus:border-emerald-400"
               placeholder="30, 14, 7, 0"
             />
           </div>
-          <label className="flex items-center gap-2 text-sm text-ink">
+
+          <div className="flex items-center gap-2 pt-1">
             <input
               type="checkbox"
+              id="auto_renew"
               checked={fields.auto_renew}
               onChange={e => setFields({ ...fields, auto_renew: e.target.checked })}
+              className="w-4 h-4 rounded border-surface-border accent-emerald-500"
             />
-            Auto-renew
-          </label>
-          <div className="flex gap-2 pt-4">
-            <button type="submit" disabled={isSaving} className="flex-1 btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed">
+            <label htmlFor="auto_renew" className="text-xs text-ink font-medium cursor-pointer">Tự động gia hạn chứng chỉ (Auto-renew)</label>
+          </div>
+
+          <div className="flex justify-end gap-3 pt-3">
+            <button type="button" onClick={onClose} className="btn btn-ghost text-xs px-4 py-2 rounded-xl">
+              Cancel
+            </button>
+            <button type="submit" disabled={isSaving} className="btn btn-primary text-xs font-semibold px-4 py-2 rounded-xl disabled:opacity-50">
               {isSaving ? 'Saving...' : 'Save'}
             </button>
-            <button type="button" onClick={onClose} className="flex-1 btn btn-ghost">Cancel</button>
           </div>
         </form>
       </div>
@@ -203,13 +213,12 @@ export default function RenewalPoliciesPage() {
   const deleteMutation = useTrackedMutation({
     mutationFn: deleteRenewalPolicy,
     invalidates: [['renewal-policies']],
-    // Backend surfaces ErrRenewalPolicyInUse as a 409. We surface as an
-    // alert so the operator sees "this policy is still attached to N
-    // certificates" and can re-target those certs to another policy
-    // before deleting.
     onSuccess: () => toast.success('Renewal policy deleted'),
     onError: (err: Error) => toast.error(`Delete failed: ${err.message}`),
   });
+
+  const policies = data?.data || [];
+  const autoRenewCount = policies.filter(p => p.auto_renew).length;
 
   const columns: Column<RenewalPolicy>[] = [
     {
@@ -217,63 +226,80 @@ export default function RenewalPoliciesPage() {
       label: 'Policy',
       render: (p) => (
         <div>
-          <div className="font-medium text-ink">{p.name}</div>
-          <div className="text-xs text-ink-faint font-mono">{p.id}</div>
+          <div className="font-bold text-sm text-ink">{p.name}</div>
+          <div className="text-[11px] text-ink-faint font-mono">{p.id}</div>
         </div>
       ),
     },
     {
       key: 'window',
       label: 'Renewal Window',
-      render: (p) => <span className="text-sm text-ink">{p.renewal_window_days} days</span>,
+      render: (p) => (
+        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-surface-muted text-ink border border-surface-border">
+          <Clock className="w-3 h-3 text-emerald-400" />
+          <span>{p.renewal_window_days} days</span>
+        </span>
+      ),
     },
     {
       key: 'auto_renew',
-      label: 'Auto',
+      label: 'Auto Renew',
       render: (p) => (
-        <span className={p.auto_renew ? 'text-brand-400' : 'text-ink-faint'}>
-          {p.auto_renew ? 'on' : 'manual'}
+        <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold border ${
+          p.auto_renew
+            ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+            : 'bg-surface-muted text-ink-muted border-surface-border'
+        }`}>
+          {p.auto_renew ? <Zap className="w-3 h-3 text-emerald-400" /> : null}
+          <span>{p.auto_renew ? 'on' : 'manual'}</span>
         </span>
       ),
     },
     {
       key: 'retries',
-      label: 'Retries',
-      render: (p) => <span className="text-sm text-ink-muted">{p.max_retries}× / {p.retry_interval_seconds}s</span>,
+      label: 'Retries & Interval',
+      render: (p) => <span className="text-xs text-ink-muted font-mono">{p.max_retries}× / {p.retry_interval_seconds}s</span>,
     },
     {
       key: 'alerts',
       label: 'Alert Thresholds',
       render: (p) => (
-        <span className="text-xs text-ink-muted font-mono">
-          {(p.alert_thresholds_days || []).join(', ') || '—'}
-        </span>
+        <div className="flex flex-wrap gap-1">
+          {(p.alert_thresholds_days || []).map(days => (
+            <span key={days} className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">
+              {days}d
+            </span>
+          ))}
+          {(!p.alert_thresholds_days || p.alert_thresholds_days.length === 0) && <span className="text-xs text-ink-faint">&mdash;</span>}
+        </div>
       ),
     },
     {
       key: 'created',
-      label: 'Created',
-      render: (p) => <span className="text-xs text-ink-muted">{formatDateTime(p.created_at)}</span>,
+      label: 'Created At',
+      render: (p) => <span className="text-xs text-ink-muted font-mono">{formatDateTime(p.created_at)}</span>,
     },
     {
       key: 'actions',
       label: '',
       render: (p) => (
-        <div className="flex gap-3 justify-end">
+        <div className="flex gap-2 justify-end">
           <button
             onClick={(e) => { e.stopPropagation(); setEditing(p); }}
-            className="text-xs text-brand-400 hover:text-brand-500 transition-colors"
+            className="px-2 py-1 text-xs text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10 rounded-lg transition-colors flex items-center gap-1 font-semibold"
           >
-            Edit
+            <Edit2 className="w-3.5 h-3.5" />
+            <span>Edit</span>
           </button>
           <button
             onClick={(e) => {
               e.stopPropagation();
               if (confirm(`Delete renewal policy ${p.name}?`)) deleteMutation.mutate(p.id);
             }}
-            className="text-xs text-red-600 hover:text-red-700 transition-colors"
+            className="px-2 py-1 text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg transition-colors flex items-center gap-1"
           >
-            Delete
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>Delete</span>
           </button>
         </div>
       ),
@@ -284,25 +310,73 @@ export default function RenewalPoliciesPage() {
     <>
       <PageHeader
         title="Renewal Policies"
-        subtitle={data ? `${data.total} policies` : undefined}
+        subtitle={data ? `${data.total} renewal policy profiles configured` : undefined}
         action={
-          <button onClick={() => setShowCreate(true)} className="btn btn-primary">
-            + New Policy
+          <button onClick={() => setShowCreate(true)} className="btn btn-primary text-xs font-semibold px-3 py-2 rounded-xl flex items-center gap-1.5">
+            <Plus className="w-4 h-4" />
+            <span>+ New Policy</span>
           </button>
         }
       />
-      <div className="flex-1 overflow-y-auto">
-        {error ? (
-          <ErrorState error={error as Error} onRetry={() => refetch()} />
-        ) : (
-          <DataTable
-            columns={columns}
-            data={data?.data || []}
-            isLoading={isLoading}
-            emptyMessage="No renewal policies configured"
-          />
-        )}
+
+      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        {/* Metric Summary Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="bg-surface p-4 rounded-2xl border border-surface-border flex items-center justify-between shadow-sm">
+            <div>
+              <div className="text-xs font-semibold text-ink-muted flex items-center gap-1.5">
+                <RotateCw className="w-4 h-4 text-emerald-400" />
+                <span>Chính Sách Tự Đổi Chứng Chỉ</span>
+              </div>
+              <div className="text-2xl font-bold text-ink mt-1 font-mono">{policies.length}</div>
+            </div>
+            <div className="p-3 rounded-xl bg-surface-muted border border-surface-border text-emerald-400">
+              <RotateCw className="w-5 h-5" />
+            </div>
+          </div>
+
+          <div className="bg-surface p-4 rounded-2xl border border-emerald-500/20 bg-gradient-to-br from-emerald-950/20 to-transparent flex items-center justify-between shadow-sm">
+            <div>
+              <div className="text-xs font-semibold text-emerald-400 flex items-center gap-1.5">
+                <Zap className="w-4 h-4" />
+                <span>Chế Độ Auto-Renew (Tự Động)</span>
+              </div>
+              <div className="text-2xl font-bold text-emerald-400 mt-1 font-mono">{autoRenewCount} / {policies.length}</div>
+            </div>
+            <div className="p-3 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              <Zap className="w-5 h-5" />
+            </div>
+          </div>
+
+          <div className="bg-surface p-4 rounded-2xl border border-surface-border flex items-center justify-between shadow-sm">
+            <div>
+              <div className="text-xs font-semibold text-ink-muted flex items-center gap-1.5">
+                <Bell className="w-4 h-4 text-amber-400" />
+                <span>Cảnh Báo & Thử Lại</span>
+              </div>
+              <div className="text-xs text-ink-muted mt-1">Cảnh báo tự động trước 30/14/7 ngày</div>
+            </div>
+            <div className="p-3 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
+              <Bell className="w-5 h-5" />
+            </div>
+          </div>
+        </div>
+
+        {/* Table Container */}
+        <div className="bg-surface rounded-2xl border border-surface-border shadow-sm overflow-hidden">
+          {error ? (
+            <ErrorState error={error as Error} onRetry={() => refetch()} />
+          ) : (
+            <DataTable
+              columns={columns}
+              data={policies}
+              isLoading={isLoading}
+              emptyMessage="No renewal policies configured"
+            />
+          )}
+        </div>
       </div>
+
       <PolicyFormModal
         title="Create Renewal Policy"
         initial={defaultFields()}
