@@ -1,35 +1,4 @@
-// Copyright 2026 certctl LLC. All rights reserved.
-// SPDX-License-Identifier: BUSL-1.1
-//
-// Phase 3 joint closure (UX-H1 + FE-H2 + FE-L4, 2026-05-14):
-//
-//   UX-H1 — sidebar regrouped from a flat 31-item list into 7 semantic
-//   groups: Inventory, Trust, Delivery, People, Notify, Access, Audit.
-//   Audit-accuracy callout: the original UX-H1 finding's wording
-//   ("/auth/* completely absent from primary nav") was factually wrong
-//   — all 8 /auth/* entries + /audit were already in the array; the
-//   issue was UNGROUPED, not absent. The correct framing is "31 flat
-//   items, no hierarchy, scroll-list to find Audit Trail."
-//
-//   FE-H2 — every nav item now carries a lucide-react icon component
-//   reference instead of a literal SVG path string. 31 path strings
-//   removed; 27 named lucide imports added.
-//
-//   FE-L4 — collapsible groups (click the group header to fold/unfold)
-//   give the keyboard-first power-user a way to compact the sidebar
-//   to just the surfaces they care about. State persists per-group in
-//   localStorage so the choice survives reloads.
-//
-// FE-M6 (CSP unsafe-inline tightening) is NOT closed here — pre-Phase-3
-// re-verification confirmed the CSP comment on style-src 'unsafe-inline'
-// cites "Tailwind (via Vite) injects per-component <style> blocks at
-// build time," not inline SVG attributes. There are also 17 production
-// tsx files with React style={...} attributes (Tooltip, AgentFleetPage,
-// UsersPage, etc.) that emit inline styles. Tightening the CSP needs
-// all those paths migrated to utility classes/CSS variables — out of
-// scope for this phase.
-
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import {
   // Inventory
@@ -37,26 +6,22 @@ import {
   // Trust
   KeyRound, FileText, ScrollText, RefreshCw, Wrench,
   // Delivery
-  Target, ListTodo, HeartPulse,
+  Target, ListTodo, HeartPulse, Globe,
   // People
   User, Users, Group,
   // Notify
-  Bell, Inbox, Activity,
+  Bell, Activity,
   // Access
   Clock, UserCog, CheckCircle2, AlertTriangle, Cog,
   // Logout + setup
-  LogOut, HelpCircle,
+  LogOut, HelpCircle, Code2,
   // Group header chevron
   ChevronDown, ChevronRight,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useAuth } from './AuthProvider';
-import { ExternalLink } from './ExternalLink';
 import logo from '../assets/certctl-logo.png';
 
-// -----------------------------------------------------------------------------
-// Nav model — 7 semantic groups across 31 items.
-// -----------------------------------------------------------------------------
 interface NavItem {
   to: string;
   label: string;
@@ -64,6 +29,7 @@ interface NavItem {
   /** Optional data-testid; today only `nav-auth-users` (Audit 2026-05-11 Fix 11). */
   testID?: string;
 }
+
 interface NavGroup {
   /** localStorage key suffix for collapsed-state persistence. */
   id: string;
@@ -77,42 +43,39 @@ const navGroups: NavGroup[] = [
     id: 'inventory',
     label: 'Danh mục',
     items: [
-      { to: '/',               label: 'Bảng điều khiển',      icon: LayoutDashboard },
-      { to: '/certificates',   label: 'Chứng chỉ',   icon: ShieldCheck },
-      { to: '/discovery',      label: 'Phát hiện',      icon: Search },
-      { to: '/agents',         label: 'Agent',         icon: Server },
-      { to: '/fleet',          label: 'Tổng quan hệ thống', icon: Network },
-      { to: '/network-scans',  label: 'Quét mạng',  icon: Radar },
-      { to: '/short-lived',    label: 'Chứng chỉ ngắn hạn',    icon: Timer },
+      { to: '/', label: 'Bảng điều khiển', icon: LayoutDashboard },
+      { to: '/certificates', label: 'Chứng chỉ', icon: ShieldCheck },
+      { to: '/discovery', label: 'Phát hiện', icon: Search },
+      { to: '/agents', label: 'Agent', icon: Server },
+      { to: '/fleet', label: 'Tổng quan hệ thống', icon: Network },
     ],
   },
   {
     id: 'trust',
     label: 'Tin cậy',
     items: [
-      { to: '/issuers',          label: 'Nhà cấp phát',          icon: KeyRound },
-      { to: '/profiles',         label: 'Hồ sơ cấu hình',         icon: FileText },
-      { to: '/policies',         label: 'Chính sách',         icon: ScrollText },
+      { to: '/issuers', label: 'Nhà cấp phát', icon: KeyRound },
+      { to: '/profiles', label: 'Hồ sơ cấu hình', icon: FileText },
+      { to: '/policies', label: 'Chính sách', icon: ScrollText },
       { to: '/renewal-policies', label: 'Chính sách gia hạn', icon: RefreshCw },
-      { to: '/scep',             label: 'Quản trị SCEP',       icon: Wrench },
-      { to: '/est',              label: 'Quản trị EST',        icon: Wrench },
     ],
   },
   {
     id: 'delivery',
     label: 'Phân phối',
     items: [
-      { to: '/targets',         label: 'Mục tiêu (Targets)',        icon: Target },
-      { to: '/jobs',            label: 'Theo dõi các tiến trình agent (Jobs)',           icon: ListTodo },
-      { to: '/health-monitor',  label: 'Giám sát sức khỏe', icon: HeartPulse },
+      { to: '/targets', label: 'Mục tiêu (Targets)', icon: Target },
+      { to: '/domains', label: 'Quản lý Domain', icon: Globe },
+      { to: '/jobs', label: 'Theo dõi các tiến trình (Jobs)', icon: ListTodo },
+      { to: '/health-monitor', label: 'Giám sát sức khỏe', icon: HeartPulse },
     ],
   },
   {
     id: 'people',
     label: 'Nhân sự',
     items: [
-      { to: '/owners',       label: 'Chủ sở hữu',       icon: User },
-      { to: '/teams',        label: 'Đội nhóm',        icon: Users },
+      { to: '/owners', label: 'Chủ sở hữu', icon: User },
+      { to: '/teams', label: 'Đội nhóm', icon: Users },
       { to: '/agent-groups', label: 'Nhóm Agent', icon: Group },
     ],
   },
@@ -121,62 +84,60 @@ const navGroups: NavGroup[] = [
     label: 'Thông báo',
     items: [
       { to: '/notifications', label: 'Thông báo', icon: Bell },
-      { to: '/digest',        label: 'Báo cáo tóm tắt',        icon: Inbox },
-      { to: '/observability', label: 'Giám sát hệ thống', icon: Activity },
     ],
   },
   {
     id: 'access',
     label: 'Truy cập',
     items: [
-      // Bundle 2 Phase 8 — OIDC + Sessions.
       { to: '/auth/oidc/providers', label: 'Nhà cung cấp OIDC', icon: ShieldCheck },
-      { to: '/auth/sessions',       label: 'Phiên làm việc',       icon: Clock },
-      // Audit 2026-05-11 Fix 11 — `nav-auth-users` testid pins this entry's
-      // selectability; sit Users immediately after Sessions to preserve the
-      // federated-identity DOM order asserted in Layout.test.tsx.
-      { to: '/auth/users',          label: 'Người dùng',          icon: Users,    testID: 'nav-auth-users' },
-      { to: '/auth/roles',          label: 'Vai trò',          icon: UserCog },
-      { to: '/auth/keys',           label: 'API Key',       icon: KeyRound },
-      { to: '/auth/approvals',      label: 'Phê duyệt',      icon: CheckCircle2 },
-      { to: '/audit',               label: 'Nhật ký kiểm toán (Audit Trail)', icon: ScrollText },
-      // Audit 2026-05-10 CRIT-4 closure — break-glass admin.
-      { to: '/auth/breakglass',     label: 'Khẩn cấp (Break-glass)',    icon: AlertTriangle },
-      { to: '/auth/settings',       label: 'Cài đặt xác thực',  icon: Cog },
+      { to: '/auth/sessions', label: 'Phiên làm việc', icon: Clock },
+      { to: '/auth/users', label: 'Người dùng', icon: Users, testID: 'nav-auth-users' },
+      { to: '/auth/roles', label: 'Vai trò', icon: UserCog },
+      { to: '/auth/keys', label: 'API Key', icon: KeyRound },
+      { to: '/auth/approvals', label: 'Phê duyệt', icon: CheckCircle2 },
+      { to: '/audit', label: 'Nhật ký kiểm toán (Audit)', icon: ScrollText },
+    ],
+  },
+  {
+    id: 'advanced',
+    label: 'Nâng cao',
+    items: [
+      { to: '/network-scans', label: 'Quét mạng (Network Scanning)', icon: Radar },
+      { to: '/scep', label: 'Quản trị SCEP', icon: Wrench },
+      { to: '/est', label: 'Quản trị EST', icon: Wrench },
+      { to: '/short-lived', label: 'Chứng chỉ ngắn hạn', icon: Timer },
+      { to: '/auth/breakglass', label: 'Khẩn cấp (Break-glass)', icon: AlertTriangle },
+      { to: '/observability', label: 'Giám sát hệ thống', icon: Activity },
+      { to: '/auth/settings', label: 'Cài đặt xác thực', icon: Cog },
+      { to: '/dev-tools', label: 'Công cụ phát triển (Dev Tools)', icon: Code2 },
     ],
   },
 ];
 
-// -----------------------------------------------------------------------------
-// useCollapsedGroups — persist per-group collapsed state in localStorage.
-// -----------------------------------------------------------------------------
 const STORAGE_KEY = 'certctl:nav:collapsed-groups';
 
 function useCollapsedGroups(): [Set<string>, (id: string) => void] {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => {
-    if (typeof window === 'undefined') return new Set();
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+      if (raw) return new Set(JSON.parse(raw) as string[]);
     } catch {
-      return new Set();
+      /* ignore storage failure */
     }
+    return new Set<string>();
   });
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify([...collapsed]));
-    } catch {
-      /* noop — storage quota / privacy mode */
-    }
-  }, [collapsed]);
 
   const toggle = (id: string) => {
     setCollapsed((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(Array.from(next)));
+      } catch {
+        /* ignore storage failure */
+      }
       return next;
     });
   };
@@ -184,11 +145,8 @@ function useCollapsedGroups(): [Set<string>, (id: string) => void] {
   return [collapsed, toggle];
 }
 
-// -----------------------------------------------------------------------------
-// Layout
-// -----------------------------------------------------------------------------
 export default function Layout() {
-  const { authRequired, logout } = useAuth();
+  const { authRequired, logout, user } = useAuth();
   const navigate = useNavigate();
   const [collapsed, toggleGroup] = useCollapsedGroups();
 
@@ -197,46 +155,80 @@ export default function Layout() {
     navigate('/?onboarding=1');
   };
 
+  const openCommandPalette = () => {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true }));
+  };
+
   return (
-    <div className="flex h-screen overflow-hidden">
-      {/* Sidebar — deep teal from logo */}
-      <aside className="w-60 bg-sidebar flex flex-col shadow-xl">
-        {/* Logo — large and prominent */}
-        <div className="px-4 pt-5 pb-4 flex flex-col items-center gap-2">
-          <div className="bg-white rounded-xl p-2 shadow-lg">
-            <img src={logo} alt="TTDL" className="h-16 w-16" width={64} height={64} loading="eager" decoding="async" />
+    <div className="flex h-screen overflow-hidden bg-slate-950 text-slate-100 font-sans selection:bg-emerald-500/30 selection:text-emerald-200">
+      {/* Sidebar — Emerald / Green Theme */}
+      <aside className="w-64 bg-emerald-950/95 backdrop-blur-xl border-r border-emerald-900/60 flex flex-col shadow-2xl relative z-20 select-none text-emerald-100">
+        {/* Brand Header */}
+        <div className="p-4 flex items-center gap-3 border-b border-emerald-900/50 bg-gradient-to-r from-emerald-950 via-teal-950 to-emerald-950">
+          <div className="relative group cursor-pointer" onClick={() => navigate('/')}>
+            <div className="absolute -inset-0.5 bg-gradient-to-r from-emerald-400 to-teal-300 rounded-2xl blur opacity-40 group-hover:opacity-90 transition duration-300"></div>
+            <div className="relative bg-emerald-900/80 p-2 rounded-xl border border-emerald-500/50 flex items-center justify-center shadow-lg shadow-emerald-500/20">
+              <img src={logo} alt="TTDL Logo" className="h-9 w-9 object-contain" width={36} height={36} loading="eager" decoding="async" />
+            </div>
           </div>
-          <div className="text-center">
-            <h1 className="text-lg font-bold text-white tracking-tight">TTDL</h1>
-            <p className="text-2xs text-brand-300 uppercase tracking-[0.2em]">Control Plane</p>
+          <div>
+            <div className="flex items-center gap-1.5">
+              <h1 className="text-base font-extrabold tracking-tight text-white font-mono">TTDL PKI</h1>
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-300 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400"></span>
+              </span>
+            </div>
+            <p className="text-[10px] font-bold text-emerald-300 tracking-widest uppercase font-mono">TRUNG TÂM ĐIỀU KHIỂN v1.0</p>
           </div>
         </div>
 
-        <nav className="flex-1 py-2 px-3 space-y-3 overflow-y-auto" aria-label="Primary navigation">
+        {/* Command Search Quick Button */}
+        <div className="px-3 pt-3 pb-1">
+          <button
+            onClick={openCommandPalette}
+            type="button"
+            className="w-full flex items-center justify-between px-3 py-1.5 bg-emerald-900/40 hover:bg-emerald-900/70 border border-emerald-800/60 hover:border-emerald-400/80 rounded-xl text-xs text-emerald-200/80 hover:text-white transition-all shadow-inner group"
+          >
+            <div className="flex items-center gap-2">
+              <Search className="w-3.5 h-3.5 text-emerald-400 group-hover:text-emerald-200 transition-colors" />
+              <span>Tìm kiếm nhanh...</span>
+            </div>
+            <kbd className="px-1.5 py-0.5 text-[10px] font-mono bg-emerald-900/80 text-emerald-300 rounded border border-emerald-700/60">⌘K</kbd>
+          </button>
+        </div>
+
+        {/* Scrollable Navigation */}
+        <nav className="flex-1 py-2 px-3 space-y-4 overflow-y-auto custom-scrollbar" aria-label="Primary navigation">
           {navGroups.map((group) => {
             const isCollapsed = collapsed.has(group.id);
             return (
-              <div key={group.id} className="space-y-0.5">
-                {/* Group header — clickable to toggle collapse. */}
+              <div key={group.id} className="space-y-1">
+                {/* Group header */}
                 <button
                   type="button"
                   onClick={() => toggleGroup(group.id)}
                   aria-expanded={!isCollapsed}
                   aria-controls={`nav-group-${group.id}`}
-                  className="w-full flex items-center justify-between px-3 py-1.5 text-2xs uppercase tracking-wider text-brand-300/60 hover:text-brand-300 transition-colors border-t border-white/10 pt-2 mt-1 first:border-t-0 first:pt-1 first:mt-0"
+                  className="w-full flex items-center justify-between px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wider text-emerald-400 hover:text-emerald-200 transition-colors rounded-lg hover:bg-emerald-900/30"
                 >
-                  <span>{group.label}</span>
-                  {isCollapsed
-                    ? <ChevronRight className="w-3 h-3 shrink-0" aria-hidden="true" />
-                    : <ChevronDown  className="w-3 h-3 shrink-0" aria-hidden="true" />}
+                  <span className="flex items-center gap-1.5">
+                    {group.label}
+                    <span className="text-[9px] px-1.5 py-0.2 rounded bg-emerald-900/80 text-emerald-300 font-mono border border-emerald-800/60">
+                      {group.items.length}
+                    </span>
+                  </span>
+                  {isCollapsed ? (
+                    <ChevronRight className="w-3 h-3 shrink-0 opacity-70" aria-hidden="true" />
+                  ) : (
+                    <ChevronDown className="w-3 h-3 shrink-0 opacity-70" aria-hidden="true" />
+                  )}
                 </button>
-                {/* Group items — fold via inline display:none when collapsed
-                    (vs unmount) so the NavLinks retain focus state and the
-                    operator's next click doesn't re-render the entire group.
-                    aria-hidden mirrors the visual state for screen readers. */}
+
+                {/* Group items */}
                 <div
                   id={`nav-group-${group.id}`}
-                  className={`space-y-0.5 ${isCollapsed ? 'hidden' : ''}`}
+                  className={`space-y-0.5 transition-all ${isCollapsed ? 'hidden' : ''}`}
                   aria-hidden={isCollapsed}
                 >
                   {group.items.map((item) => {
@@ -248,15 +240,23 @@ export default function Layout() {
                         end={item.to === '/'}
                         data-testid={item.testID}
                         className={({ isActive }) =>
-                          `flex items-center gap-3 px-3 py-2 text-sm rounded transition-all duration-150 ${
-                            isActive
-                              ? 'bg-white/15 text-white font-semibold shadow-sm'
-                              : 'text-sidebar-text hover:text-white hover:bg-white/10'
+                          `group flex items-center gap-3 px-3 py-2 text-xs rounded-xl font-medium transition-all duration-200 relative ${isActive
+                            ? 'bg-gradient-to-r from-emerald-600/90 via-emerald-600/70 to-teal-700/50 text-white font-bold border-l-4 border-emerald-300 shadow-md shadow-emerald-900/50 pl-2.5'
+                            : 'text-emerald-200/90 hover:text-white hover:bg-emerald-900/40 hover:translate-x-0.5'
                           }`
                         }
                       >
-                        <ItemIcon className="w-[18px] h-[18px] shrink-0" strokeWidth={1.75} aria-hidden="true" />
-                        {item.label}
+                        {({ isActive }) => (
+                          <>
+                            <ItemIcon
+                              className={`w-4 h-4 shrink-0 transition-transform duration-200 group-hover:scale-110 ${isActive ? 'text-emerald-200 drop-shadow-[0_0_8px_rgba(52,211,153,0.8)]' : 'text-emerald-400 group-hover:text-emerald-200'
+                                }`}
+                              strokeWidth={isActive ? 2.2 : 1.75}
+                              aria-hidden="true"
+                            />
+                            <span className="truncate">{item.label}</span>
+                          </>
+                        )}
                       </NavLink>
                     );
                   })}
@@ -266,48 +266,40 @@ export default function Layout() {
           })}
         </nav>
 
-        <div className="px-3 pb-2 pt-2 border-t border-white/10">
+        {/* Footer Actions & User Status */}
+        <div className="p-3 border-t border-emerald-900/60 bg-emerald-950/90 space-y-2">
           <button
             type="button"
             onClick={openSetupGuide}
             aria-label="Setup guide"
             title="Mở lại hướng dẫn cài đặt"
-            className="w-full flex items-center gap-3 px-3 py-2 text-sm rounded text-sidebar-text hover:text-white hover:bg-white/10 transition-all duration-150"
+            className="w-full flex items-center gap-2.5 px-3 py-2 text-xs rounded-xl text-emerald-300/80 hover:text-white hover:bg-emerald-900/50 border border-transparent hover:border-emerald-800/60 transition-all font-medium"
           >
-            <HelpCircle className="w-[18px] h-[18px] shrink-0" strokeWidth={1.75} aria-hidden="true" />
-            <span>Hướng dẫn cài đặt</span>
+            <HelpCircle className="w-4 h-4 text-emerald-400 shrink-0" strokeWidth={1.75} aria-hidden="true" />
+            <span>Setup guide</span>
           </button>
-        </div>
 
-        {/* Sidebar footer (post-2026-05-14 simplification per operator).
-            Pre-fix the footer had two rows: the maintainer attribution
-            (with only "Shankar" linked) PLUS a "certctl" font-mono label
-            sitting next to the logout button. Operator dropped the
-            "certctl" label as redundant (the brand mark + product name
-            are already in the sidebar header), so this single row is
-            the entire footer:
-              • Whole "Built and maintained by Shankar" line is the
-                LinkedIn link — routes through ExternalLink so the
-                rel="noopener noreferrer" pair is auto-emitted on the
-                same line + the Bundle-8 L-015 CI guard stays green.
-              • Logout sits flush-right on the same row, separated
-                visually by justify-between flex layout. Only renders
-                when authRequired is true. */}
-        <div className="px-5 pt-3 pb-3 border-t border-white/10 flex items-center justify-end gap-3">
-          {authRequired && (
-            <button
-              onClick={logout}
-              className="text-xs text-sidebar-text hover:text-white transition-colors shrink-0"
-              title="Đăng xuất"
-              aria-label="Đăng xuất"
-            >
-              <LogOut className="w-4 h-4" strokeWidth={1.75} aria-hidden="true" />
-            </button>
-          )}
+          <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-emerald-900/50 border border-emerald-800/60 text-xs">
+            <div className="flex items-center gap-2 overflow-hidden">
+              <div className="w-2 h-2 rounded-full bg-emerald-400 shrink-0 animate-pulse"></div>
+              <span className="text-emerald-200 font-mono text-[11px] truncate">{user || 'Active Session'}</span>
+            </div>
+
+            {authRequired && (
+              <button
+                onClick={logout}
+                className="p-1 text-emerald-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors shrink-0"
+                title="Đăng xuất"
+                aria-label="Đăng xuất"
+              >
+                <LogOut className="w-4 h-4" strokeWidth={1.75} aria-hidden="true" />
+              </button>
+            )}
+          </div>
         </div>
       </aside>
 
-      {/* Main content — light background */}
+      {/* Main content area */}
       <main className="flex-1 flex flex-col overflow-hidden bg-page">
         <Outlet />
       </main>

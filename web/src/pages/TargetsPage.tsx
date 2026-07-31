@@ -18,9 +18,10 @@ import {
   Cpu,
   Globe,
   Lock,
+  Pencil,
 } from 'lucide-react';
 import { useTrackedMutation } from '../hooks/useTrackedMutation';
-import { getTargets, createTarget, deleteTarget, getAgents } from '../api/client';
+import { getTargets, createTarget, updateTarget, deleteTarget, getAgents } from '../api/client';
 import PageHeader from '../components/PageHeader';
 import DataTable from '../components/DataTable';
 import type { Column } from '../components/DataTable';
@@ -647,54 +648,221 @@ function CreateTargetWizard({ onClose, onSuccess }: { onClose: () => void; onSuc
   );
 }
 
+function EditTargetModal({ target, onClose, onSuccess }: { target: Target; onClose: () => void; onSuccess: () => void }) {
+  const [name, setName] = useState(target.name);
+  const [agentId, setAgentId] = useState(target.agent_id || '');
+  const [enabled, setEnabled] = useState(target.enabled !== false);
+  const [config, setConfig] = useState<Record<string, string>>(() => {
+    const init: Record<string, string> = {};
+    if (target.config) {
+      for (const [k, v] of Object.entries(target.config)) {
+        if (typeof v === 'object' && v !== null) {
+          for (const [subK, subV] of Object.entries(v as Record<string, unknown>)) {
+            init[subK] = String(subV ?? '');
+          }
+        } else {
+          init[k] = String(v ?? '');
+        }
+      }
+    }
+    return init;
+  });
+  const [error, setError] = useState('');
+
+  const { data: agentsResp } = useQuery({
+    queryKey: ['agents', 'form'],
+    queryFn: () => getAgents({ per_page: '500' }),
+  });
+  const agents = agentsResp?.data || [];
+
+  const fields = CONFIG_FIELDS[target.type] || [];
+
+  const mutation = useTrackedMutation({
+    mutationFn: () => {
+      const flat = Object.fromEntries(Object.entries(config).filter(([, v]) => v));
+      const buildPayloadConfig = () => {
+        if (target.type === 'IIS') {
+          const iisWinrmKeys = ['winrm_host', 'winrm_port', 'winrm_username', 'winrm_password', 'winrm_https', 'winrm_insecure', 'winrm_timeout'];
+          const winrmObj: Record<string, unknown> = {};
+          const result: Record<string, unknown> = {};
+          for (const [k, v] of Object.entries(flat)) {
+            if (iisWinrmKeys.includes(k)) winrmObj[k] = v;
+            else result[k] = v;
+          }
+          if (Object.keys(winrmObj).length > 0) result['winrm'] = winrmObj;
+          return result;
+        }
+        return flat;
+      };
+
+      return updateTarget(target.id, {
+        name,
+        agent_id: agentId,
+        enabled,
+        config: buildPayloadConfig(),
+      });
+    },
+    invalidates: [['targets']],
+    onSuccess: () => onSuccess(),
+    onError: (err: Error) => setError(err.message),
+  });
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-surface border border-surface-border rounded-2xl p-6 w-full max-w-2xl shadow-2xl max-h-[92vh] overflow-y-auto space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between pb-3 border-b border-surface-border">
+          <div className="flex items-center gap-2">
+            <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              <Pencil className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-ink">Chỉnh Sửa Deployment Target</h3>
+              <p className="text-xs text-ink-muted">Mã Target: <span className="font-mono text-emerald-400 font-semibold">{target.id}</span> ({typeLabels[target.type] || target.type})</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-ink-muted hover:text-ink text-xs p-1">
+            <XCircle className="w-5 h-5" />
+          </button>
+        </div>
+
+        {error && <div className="bg-red-500/10 border border-red-500/30 text-red-400 rounded-xl p-3 text-xs">{error}</div>}
+
+        <div className="space-y-4 text-xs">
+          <div>
+            <label className="block text-xs font-semibold text-ink mb-1">Tên Target (Name) *</label>
+            <input
+              type="text"
+              value={name}
+              onChange={e => setName(e.target.value)}
+              className="w-full bg-surface-muted border border-surface-border rounded-xl px-3 py-2 text-xs text-ink focus:outline-none focus:border-emerald-400"
+              placeholder="e.g. Target-Ubuntu-NGINX"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-ink mb-1">Agent Giao Phụ Trách *</label>
+            <select
+              value={agentId}
+              onChange={e => setAgentId(e.target.value)}
+              className="w-full bg-surface-muted border border-surface-border rounded-xl px-3 py-2 text-xs text-ink focus:outline-none focus:border-emerald-400 font-mono"
+            >
+              <option value="">-- Chọn Agent --</option>
+              {agents.map(a => (
+                <option key={a.id} value={a.id}>
+                  {a.hostname || a.id} ({a.status})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="edit-target-enabled"
+              checked={enabled}
+              onChange={e => setEnabled(e.target.checked)}
+              className="rounded border-surface-border bg-surface-muted text-emerald-500 focus:ring-emerald-400"
+            />
+            <label htmlFor="edit-target-enabled" className="text-xs font-semibold text-ink">
+              Kích hoạt Deployment Target này (Enabled)
+            </label>
+          </div>
+
+          {/* Config Fields */}
+          {fields.length > 0 && (
+            <div className="space-y-3 pt-2 border-t border-surface-border">
+              <h4 className="font-bold text-xs text-emerald-400 uppercase tracking-wider">Thông Số Cấu Hình ({target.type})</h4>
+              <div className="grid grid-cols-1 gap-3">
+                {fields.map(f => (
+                  <div key={f.key}>
+                    <label className="block text-xs font-semibold text-ink mb-1">
+                      {f.label} {f.required && <span className="text-red-400">*</span>}
+                    </label>
+                    <input
+                      type="text"
+                      value={config[f.key] || ''}
+                      onChange={e => setConfig({ ...config, [f.key]: e.target.value })}
+                      placeholder={f.placeholder}
+                      className="w-full bg-surface-muted border border-surface-border rounded-xl px-3 py-2 text-xs text-ink font-mono focus:outline-none focus:border-emerald-400"
+                    />
+                    {f.hint && <p className="text-[10px] text-ink-faint mt-0.5">{f.hint}</p>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-3 pt-4 border-t border-surface-border text-xs">
+          <button onClick={onClose} className="btn btn-ghost px-4 py-2 rounded-xl">
+            Hủy bỏ
+          </button>
+          <button
+            onClick={() => mutation.mutate()}
+            disabled={mutation.isPending || !name.trim() || !agentId}
+            className="btn btn-primary font-semibold px-4 py-2 rounded-xl disabled:opacity-50 flex items-center gap-1.5"
+          >
+            <CheckCircle2 className="w-4 h-4" />
+            <span>Lưu Thay Đổi</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function TargetsPage() {
   const queryClient = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
+  const [editingTarget, setEditingTarget] = useState<Target | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<Target | null>(null);
   const [search, setSearch] = useState('');
 
-  const { data, isLoading, error, refetch } = useQuery({
+  const { data: targetsResp, isLoading, error, refetch } = useQuery({
     queryKey: ['targets'],
-    queryFn: () => getTargets(),
+    queryFn: () => getTargets({ per_page: '500' }),
   });
+  const targets = targetsResp?.data || [];
 
   const deleteMutation = useTrackedMutation({
     mutationFn: deleteTarget,
     invalidates: [['targets']],
-    onSuccess: () => toast.success('Đã xóa Deployment Target thành công'),
-    onError: (err: Error) => toast.error(`Xóa thất bại: ${err.message}`),
+    onSuccess: () => {
+      setConfirmDelete(null);
+      toast.success('Deleted target');
+    },
+    onError: (err: Error) => toast.error(err.message),
   });
 
-  const allTargets = data?.data || [];
-  const filteredTargets = allTargets.filter(t => 
-    t.name.toLowerCase().includes(search.toLowerCase()) ||
-    t.type.toLowerCase().includes(search.toLowerCase()) ||
-    (t.agent_id && t.agent_id.toLowerCase().includes(search.toLowerCase()))
-  );
+  const filteredTargets = targets.filter(t => {
+    if (!search.trim()) return true;
+    const q = search.toLowerCase();
+    return (
+      t.name.toLowerCase().includes(q) ||
+      t.id.toLowerCase().includes(q) ||
+      t.type.toLowerCase().includes(q) ||
+      (t.agent_id && t.agent_id.toLowerCase().includes(q))
+    );
+  });
 
   const columns: Column<Target>[] = [
     {
       key: 'name',
       label: 'Target Name',
       render: (t) => (
-        <div className="flex items-center gap-2.5">
-          <div className="p-2 rounded-lg bg-surface-muted border border-surface-border text-emerald-400">
-            <Server className="w-4 h-4" />
-          </div>
-          <div>
-            <Link to={`/targets/${t.id}`} className="font-semibold text-accent hover:text-accent-bright transition-colors" onClick={(e) => e.stopPropagation()}>
-              {t.name}
-            </Link>
-            <div className="text-[11px] text-ink-faint font-mono">{t.id}</div>
-          </div>
+        <div>
+          <Link to={`/targets/${t.id}`} className="font-semibold text-xs text-ink hover:text-emerald-400 transition-colors">
+            {t.name}
+          </Link>
+          <div className="text-[10px] text-ink-faint font-mono">{t.id}</div>
         </div>
       ),
     },
     {
       key: 'type',
-      label: 'Server Type',
+      label: 'Type',
       render: (t) => (
-        <span className="px-2.5 py-1 rounded-md text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+        <span className="text-xs text-emerald-400 font-semibold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
           {typeLabels[t.type] || t.type}
         </span>
       ),
@@ -739,15 +907,26 @@ export default function TargetsPage() {
       key: 'actions',
       label: '',
       render: (t) => (
-        <button
-          onClick={(e) => { e.stopPropagation(); setConfirmDelete(t); }}
-          className="p-1.5 text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg transition-colors flex items-center gap-1 text-xs"
-          title="Delete Target"
-          aria-label="Delete"
-        >
-          <Trash2 className="w-4 h-4" />
-          <span>Delete</span>
-        </button>
+        <div className="flex items-center justify-end gap-2">
+          <button
+            onClick={(e) => { e.stopPropagation(); setEditingTarget(t); }}
+            className="p-1.5 text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10 rounded-lg transition-colors flex items-center gap-1 text-xs font-medium"
+            title="Sửa Target"
+            aria-label="Edit Target"
+          >
+            <Pencil className="w-3.5 h-3.5" />
+            <span>Sửa</span>
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); setConfirmDelete(t); }}
+            className="p-1.5 text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg transition-colors flex items-center gap-1 text-xs"
+            title="Delete Target"
+            aria-label="Delete"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>Xóa</span>
+          </button>
+        </div>
       ),
     },
   ];
@@ -806,6 +985,19 @@ export default function TargetsPage() {
             setShowCreate(false);
             queryClient.invalidateQueries({ queryKey: ['targets'] });
             toast.success('Đã khởi tạo Deployment Target thành công!');
+          }}
+        />
+      )}
+
+      {/* Edit Target Modal */}
+      {editingTarget && (
+        <EditTargetModal
+          target={editingTarget}
+          onClose={() => setEditingTarget(null)}
+          onSuccess={() => {
+            setEditingTarget(null);
+            queryClient.invalidateQueries({ queryKey: ['targets'] });
+            toast.success('Đã cập nhật Deployment Target thành công!');
           }}
         />
       )}

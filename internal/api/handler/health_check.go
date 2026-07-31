@@ -54,6 +54,16 @@ func (h *HealthCheckHandler) ListHealthChecks(w http.ResponseWriter, r *http.Req
 		perPage = 50
 	}
 
+	if h.service == nil {
+		JSON(w, http.StatusOK, PagedResponse{
+			Data:    []*domain.EndpointHealthCheck{},
+			Total:   0,
+			Page:    page,
+			PerPage: perPage,
+		})
+		return
+	}
+
 	// Parse enabled flag if provided
 	var enabledFilter *bool
 	if enabledStr != "" {
@@ -95,6 +105,11 @@ func (h *HealthCheckHandler) GetHealthCheck(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	if h.service == nil {
+		Error(w, http.StatusServiceUnavailable, "health check service is disabled")
+		return
+	}
+
 	id := r.PathValue("id")
 	if id == "" {
 		Error(w, http.StatusBadRequest, "health check ID is required")
@@ -114,6 +129,11 @@ func (h *HealthCheckHandler) GetHealthCheck(w http.ResponseWriter, r *http.Reque
 func (h *HealthCheckHandler) CreateHealthCheck(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		Error(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	if h.service == nil {
+		Error(w, http.StatusServiceUnavailable, "health check service is disabled")
 		return
 	}
 
@@ -154,6 +174,11 @@ func (h *HealthCheckHandler) CreateHealthCheck(w http.ResponseWriter, r *http.Re
 func (h *HealthCheckHandler) UpdateHealthCheck(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPut {
 		Error(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	if h.service == nil {
+		Error(w, http.StatusServiceUnavailable, "health check service is disabled")
 		return
 	}
 
@@ -209,6 +234,11 @@ func (h *HealthCheckHandler) DeleteHealthCheck(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	if h.service == nil {
+		Error(w, http.StatusServiceUnavailable, "health check service is disabled")
+		return
+	}
+
 	id := r.PathValue("id")
 	if id == "" {
 		Error(w, http.StatusBadRequest, "health check ID is required")
@@ -227,6 +257,11 @@ func (h *HealthCheckHandler) DeleteHealthCheck(w http.ResponseWriter, r *http.Re
 func (h *HealthCheckHandler) GetHealthCheckHistory(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		Error(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	if h.service == nil {
+		JSON(w, http.StatusOK, []*domain.HealthHistoryEntry{})
 		return
 	}
 
@@ -267,6 +302,11 @@ func (h *HealthCheckHandler) AcknowledgeHealthCheck(w http.ResponseWriter, r *ht
 		return
 	}
 
+	if h.service == nil {
+		Error(w, http.StatusServiceUnavailable, "health check service is disabled")
+		return
+	}
+
 	id := r.PathValue("id")
 	if id == "" {
 		Error(w, http.StatusBadRequest, "health check ID is required")
@@ -298,6 +338,11 @@ func (h *HealthCheckHandler) AcknowledgeHealthCheck(w http.ResponseWriter, r *ht
 func (h *HealthCheckHandler) GetHealthCheckSummary(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		Error(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	if h.service == nil {
+		JSON(w, http.StatusOK, &domain.HealthCheckSummary{})
 		return
 	}
 

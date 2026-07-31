@@ -222,6 +222,7 @@ services:
       CERTCTL_AUTH_SECRET: ${CERTCTL_AUTH_SECRET}
       CERTCTL_API_KEYS_NAMED: ${CERTCTL_API_KEYS_NAMED}
       CERTCTL_NETWORK_SCAN_ENABLED: "true"  # Enable network scan GUI
+      CERTCTL_HEALTH_CHECK_ENABLED: "true"  # Enable health check monitoring GUI
       CERTCTL_CONFIG_ENCRYPTION_KEY: ${CERTCTL_CONFIG_ENCRYPTION_KEY}  # AES-256-GCM for dynamic issuer/target config
       # Bootstrap token interpolation surface (Auditable Codebase Bundle
       # cold-DB smoke closure, 2026-05-12). Pre-fix, the `env-file +

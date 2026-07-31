@@ -49,6 +49,7 @@ const IssuerDetailPage      = lazy(() => import('./pages/IssuerDetailPage'));
 const IssuerHierarchyPage   = lazy(() => import('./pages/IssuerHierarchyPage'));
 const TargetsPage           = lazy(() => import('./pages/TargetsPage'));
 const TargetDetailPage      = lazy(() => import('./pages/TargetDetailPage'));
+const DomainsPage           = lazy(() => import('./pages/DomainsPage'));
 const ProfilesPage          = lazy(() => import('./pages/ProfilesPage'));
 // Delivery & jobs.
 const JobsPage              = lazy(() => import('./pages/JobsPage'));
@@ -72,6 +73,7 @@ const DiscoveryPage         = lazy(() => import('./pages/DiscoveryPage'));
 const NetworkScanPage       = lazy(() => import('./pages/NetworkScanPage'));
 const HealthMonitorPage     = lazy(() => import('./pages/HealthMonitorPage'));
 const ObservabilityPage     = lazy(() => import('./pages/ObservabilityPage'));
+const DevToolsPage          = lazy(() => import('./pages/DevToolsPage'));
 // Protocol admin.
 const SCEPAdminPage         = lazy(() => import('./pages/SCEPAdminPage'));
 const ESTAdminPage          = lazy(() => import('./pages/ESTAdminPage'));
@@ -174,6 +176,7 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="issuers/:id/hierarchy"   element={lazyRoute(<IssuerHierarchyPage />)} />
                   <Route path="targets"                 element={lazyRoute(<TargetsPage />)} />
                   <Route path="targets/:id"             element={lazyRoute(<TargetDetailPage />)} />
+                  <Route path="domains"                 element={lazyRoute(<DomainsPage />)} />
                   <Route path="owners"                  element={lazyRoute(<OwnersPage />)} />
                   <Route path="teams"                   element={lazyRoute(<TeamsPage />)} />
                   <Route path="agent-groups"            element={lazyRoute(<AgentGroupsPage />)} />
@@ -184,6 +187,7 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="health-monitor"          element={lazyRoute(<HealthMonitorPage />)} />
                   <Route path="digest"                  element={lazyRoute(<DigestPage />)} />
                   <Route path="observability"           element={lazyRoute(<ObservabilityPage />)} />
+                  <Route path="dev-tools"               element={lazyRoute(<DevToolsPage />)} />
                   {/* SCEP RFC 8894 + Intune master bundle Phase 9.4 (initial)
                       + Phase 9 follow-up (rebrand): per-profile SCEP
                       Administration page with Profiles / Intune Monitoring /

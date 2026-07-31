@@ -1,32 +1,11 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { ShieldCheck, User, Users, Search, Trash2, Clock, Globe, Shield } from 'lucide-react';
 import { listSessions, revokeSession, type SessionInfo } from '../../api/client';
 import { useAuthMe } from '../../hooks/useAuthMe';
 import PageHeader from '../../components/PageHeader';
 import Timestamp from '../../components/Timestamp';
 import ErrorState from '../../components/ErrorState';
-
-// =============================================================================
-// Bundle 2 Phase 8 — SessionsPage.
-//
-// Renders the caller's active sessions by default. When the caller
-// holds auth.session.list.all, an "All actors" toggle exposes the
-// admin view (every active session in the tenant).
-//
-// Routes:
-//   /auth/sessions — admin all-actors view + own sessions toggle.
-// API:
-//   GET    /api/v1/auth/sessions                   (own; auth.session.list)
-//   GET    /api/v1/auth/sessions?actor_id=<other>  (admin; auth.session.list.all)
-//   DELETE /api/v1/auth/sessions/{id}              (own bypass + auth.session.revoke)
-//
-// Permission gating: page itself requires auth.session.list. Switch
-// to all-actors view requires auth.session.list.all. Revoke action
-// is shown for: (a) the caller's own sessions (own-bypass at the
-// handler), AND (b) any session when caller holds auth.session.revoke.
-// Server-side enforcement is the load-bearing layer; client-side
-// hide is UX.
-// =============================================================================
 
 type ViewMode = 'self' | 'all';
 
@@ -42,7 +21,6 @@ export default function SessionsPage() {
   const [filterActorID, setFilterActorID] = useState('');
   const [error, setError] = useState<string | null>(null);
 
-  // Effective actor_id query param when in admin view.
   const effectiveActorID = view === 'all' ? filterActorID.trim() : '';
 
   const { data, isLoading, error: loadErr } = useQuery({
@@ -54,10 +32,12 @@ export default function SessionsPage() {
 
   if (!canList) {
     return (
-      <div className="p-8">
-        <PageHeader title="Sessions" subtitle="Active session management" />
-        <ErrorState error={new Error('You need the auth.session.list permission to view sessions.')} />
-      </div>
+      <>
+        <PageHeader title="Sessions" subtitle="Quản lý các phiên hoạt động trên hệ thống" />
+        <div className="p-6">
+          <ErrorState error={new Error('You need the auth.session.list permission to view sessions.')} />
+        </div>
+      </>
     );
   }
 
@@ -74,131 +54,146 @@ export default function SessionsPage() {
   const callerActorID = me?.actor_id || '';
 
   return (
-    <div className="p-8 space-y-6">
-      <PageHeader title="Sessions" subtitle="Active session management" />
+    <>
+      <PageHeader title="Sessions" subtitle="Quản lý các phiên hoạt động và đăng xuất tài khoản khẩn cấp" />
 
-      {error && (
-        <div
-          className="p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700"
-          data-testid="sessions-page-error"
-        >
-          {error}
-        </div>
-      )}
-
-      <div className="flex gap-2 items-center">
-        <button
-          onClick={() => setView('self')}
-          className={
-            view === 'self'
-              ? 'px-3 py-1.5 text-sm bg-brand-600 text-white rounded'
-              : 'px-3 py-1.5 text-sm border border-surface-border rounded bg-page hover:bg-surface text-ink'
-          }
-          data-testid="sessions-view-self"
-        >
-          My sessions
-        </button>
-        {canListAll && (
-          <button
-            onClick={() => setView('all')}
-            className={
-              view === 'all'
-                ? 'px-3 py-1.5 text-sm bg-brand-600 text-white rounded'
-                : 'px-3 py-1.5 text-sm border border-surface-border rounded bg-page hover:bg-surface text-ink'
-            }
-            data-testid="sessions-view-all"
+      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        {error && (
+          <div
+            className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-xs text-red-400 font-medium"
+            data-testid="sessions-page-error"
           >
-            All actors (admin)
-          </button>
+            {error}
+          </div>
         )}
-        {view === 'all' && (
-          <input
-            value={filterActorID}
-            onChange={e => setFilterActorID(e.target.value)}
-            placeholder="Filter by actor_id (e.g. u-alice)"
-            className="ml-2 flex-1 px-2 py-1.5 text-sm border border-surface-border rounded bg-page text-ink"
-            data-testid="sessions-actor-id-filter"
-          />
+
+        {/* View Controls & Filter Bar */}
+        <div className="flex flex-wrap items-center gap-3 bg-surface p-4 rounded-2xl border border-surface-border shadow-sm">
+          <div className="flex items-center gap-1.5 p-1 bg-surface-muted border border-surface-border rounded-xl">
+            <button
+              onClick={() => setView('self')}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 ${
+                view === 'self'
+                  ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 shadow-sm'
+                  : 'text-ink-muted hover:text-ink'
+              }`}
+              data-testid="sessions-view-self"
+            >
+              <User className="w-3.5 h-3.5" />
+              <span>My sessions</span>
+            </button>
+            {canListAll && (
+              <button
+                onClick={() => setView('all')}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 ${
+                  view === 'all'
+                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 shadow-sm'
+                    : 'text-ink-muted hover:text-ink'
+                }`}
+                data-testid="sessions-view-all"
+              >
+                <Users className="w-3.5 h-3.5" />
+                <span>All actors (admin)</span>
+              </button>
+            )}
+          </div>
+
+          {view === 'all' && (
+            <div className="flex-1 max-w-sm relative">
+              <Search className="w-4 h-4 text-ink-faint absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                value={filterActorID}
+                onChange={e => setFilterActorID(e.target.value)}
+                placeholder="Lọc theo actor_id (ví dụ: u-alice)..."
+                className="w-full pl-9 pr-3 py-1.5 text-xs border border-surface-border rounded-xl bg-surface-muted text-ink font-mono focus:outline-none focus:border-emerald-400"
+                data-testid="sessions-actor-id-filter"
+              />
+            </div>
+          )}
+        </div>
+
+        {isLoading && (
+          <div className="p-8 text-center text-xs text-ink-muted" data-testid="sessions-loading">
+            Loading active sessions…
+          </div>
+        )}
+        {loadErr && <ErrorState error={loadErr instanceof Error ? loadErr : new Error(String(loadErr))} />}
+
+        {data && data.sessions && data.sessions.length === 0 && (
+          <div
+            className="bg-surface border border-surface-border rounded-2xl p-12 text-center shadow-sm"
+            data-testid="sessions-empty"
+          >
+            <ShieldCheck className="w-10 h-10 text-ink-faint mx-auto mb-2 opacity-50" />
+            <p className="text-ink-muted text-xs">Không có phiên làm việc nào đang hoạt động (No active sessions).</p>
+          </div>
+        )}
+
+        {data && data.sessions && data.sessions.length > 0 && (
+          <div className="bg-surface border border-surface-border rounded-2xl shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-surface-muted/50 text-ink-muted text-[10px] uppercase tracking-wider border-b border-surface-border">
+                  <tr>
+                    <th className="text-left px-4 py-3">Session ID</th>
+                    <th className="text-left px-4 py-3">Actor</th>
+                    <th className="text-left px-4 py-3">Địa Chỉ IP</th>
+                    <th className="text-left px-4 py-3">Lần Cuối Hoạt Động (Last Seen)</th>
+                    <th className="text-left px-4 py-3">Thời Gian Hết Hạn (Expiry)</th>
+                    <th className="text-right px-4 py-3">Thao Tác</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-surface-border/50">
+                  {data.sessions.map((s: SessionInfo) => {
+                    const isOwn = s.actor_id === callerActorID;
+                    const showRevoke = isOwn || canRevokeAny;
+                    return (
+                      <tr
+                        key={s.id}
+                        className="hover:bg-surface-muted/40 transition-colors"
+                        data-testid={`session-row-${s.id}`}
+                      >
+                        <td className="px-4 py-3 font-mono text-[11px] font-semibold text-emerald-400">{s.id}</td>
+                        <td className="px-4 py-3">
+                          <span className="font-mono text-ink font-bold">{s.actor_id}</span>
+                          <span className="ml-1 text-ink-muted text-[10px]">({s.actor_type})</span>
+                          {isOwn && (
+                            <span
+                              className="ml-2 inline-flex items-center px-2 py-0.5 text-[10px] rounded-full font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
+                              data-testid={`session-self-pill-${s.id}`}
+                            >
+                              you
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 font-mono text-ink-muted">{s.ip_address || '—'}</td>
+                        <td className="px-4 py-3 text-ink-muted font-mono">
+                          <Timestamp iso={s.last_seen_at} />
+                        </td>
+                        <td className="px-4 py-3 text-ink-muted font-mono">
+                          <Timestamp iso={s.absolute_expires_at} />
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          {showRevoke && (
+                            <button
+                              onClick={() => handleRevoke(s)}
+                              className="px-2.5 py-1 text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg transition-colors font-semibold inline-flex items-center gap-1"
+                              data-testid={`session-revoke-${s.id}`}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Revoke</span>
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
         )}
       </div>
-
-      {isLoading && (
-        <div className="text-sm text-ink-muted" data-testid="sessions-loading">
-          Loading sessions…
-        </div>
-      )}
-      {loadErr && <ErrorState error={loadErr instanceof Error ? loadErr : new Error(String(loadErr))} />}
-
-      {data && data.sessions && data.sessions.length === 0 && (
-        <div
-          className="bg-surface border border-surface-border rounded p-6 text-center"
-          data-testid="sessions-empty"
-        >
-          <p className="text-ink-muted text-sm">No active sessions.</p>
-        </div>
-      )}
-
-      {data && data.sessions && data.sessions.length > 0 && (
-        <div className="bg-surface border border-surface-border rounded overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-page border-b border-surface-border">
-              <tr>
-                <th className="text-left px-4 py-2 font-medium text-ink">Session ID</th>
-                <th className="text-left px-4 py-2 font-medium text-ink">Actor</th>
-                <th className="text-left px-4 py-2 font-medium text-ink">IP</th>
-                <th className="text-left px-4 py-2 font-medium text-ink">Last seen</th>
-                <th className="text-left px-4 py-2 font-medium text-ink">Absolute expiry</th>
-                <th className="text-right px-4 py-2 font-medium text-ink">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.sessions.map((s: SessionInfo) => {
-                const isOwn = s.actor_id === callerActorID;
-                const showRevoke = isOwn || canRevokeAny;
-                return (
-                  <tr
-                    key={s.id}
-                    className="border-b border-surface-border hover:bg-page"
-                    data-testid={`session-row-${s.id}`}
-                  >
-                    <td className="px-4 py-2 font-mono text-xs">{s.id}</td>
-                    <td className="px-4 py-2">
-                      <span className="font-mono text-xs">{s.actor_id}</span>
-                      <span className="ml-1 text-ink-muted">({s.actor_type})</span>
-                      {isOwn && (
-                        <span
-                          className="ml-2 inline-block px-1.5 py-0.5 text-2xs rounded bg-brand-50 text-brand-700"
-                          data-testid={`session-self-pill-${s.id}`}
-                        >
-                          you
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-2 text-ink-muted">{s.ip_address || '—'}</td>
-                    <td className="px-4 py-2 text-ink-muted">
-                      <Timestamp iso={s.last_seen_at} />
-                    </td>
-                    <td className="px-4 py-2 text-ink-muted">
-                      <Timestamp iso={s.absolute_expires_at} />
-                    </td>
-                    <td className="px-4 py-2 text-right">
-                      {showRevoke && (
-                        <button
-                          onClick={() => handleRevoke(s)}
-                          className="text-xs text-red-600 hover:underline"
-                          data-testid={`session-revoke-${s.id}`}
-                        >
-                          Revoke
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
+    </>
   );
 }

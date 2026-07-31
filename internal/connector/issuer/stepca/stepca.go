@@ -54,6 +54,9 @@ type Config struct {
 	// If empty, the system trust store is used.
 	RootCertPath string `json:"root_cert_path,omitempty"`
 
+	// InsecureSkipVerify skips TLS certificate verification (useful for local step-ca in Docker with self-signed TLS).
+	InsecureSkipVerify bool `json:"insecure_skip_verify,omitempty"`
+
 	// ProvisionerName is the name of the JWK provisioner to use for signing.
 	ProvisionerName string `json:"provisioner_name"`
 
@@ -70,6 +73,53 @@ type Config struct {
 	ValidityDays int `json:"validity_days,omitempty"`
 }
 
+// UnmarshalJSON implements custom JSON unmarshaling to support configuration key aliases
+// (e.g., url / ca_url, provisioner / provisioner_name, insecure / insecure_skip_verify).
+func (c *Config) UnmarshalJSON(data []byte) error {
+	type Alias Config
+	aux := struct {
+		*Alias
+		URL           string      `json:"url"`
+		CAURL         string      `json:"ca_url"`
+		Provisioner   string      `json:"provisioner"`
+		Insecure      interface{} `json:"insecure"`
+		SkipTLSVerify interface{} `json:"skip_tls_verify"`
+	}{
+		Alias: (*Alias)(c),
+	}
+
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	if c.CAURL == "" && aux.URL != "" {
+		c.CAURL = aux.URL
+	}
+	if c.CAURL == "" && aux.CAURL != "" {
+		c.CAURL = aux.CAURL
+	}
+	if c.ProvisionerName == "" && aux.Provisioner != "" {
+		c.ProvisionerName = aux.Provisioner
+	}
+
+	// Parse boolean flags from string or bool representations
+	parseBool := func(v interface{}) bool {
+		switch val := v.(type) {
+		case bool:
+			return val
+		case string:
+			return val == "true" || val == "1" || val == "yes"
+		}
+		return false
+	}
+
+	if !c.InsecureSkipVerify {
+		c.InsecureSkipVerify = parseBool(aux.Insecure) || parseBool(aux.SkipTLSVerify)
+	}
+
+	return nil
+}
+
 // Connector implements the issuer.Connector interface for step-ca.
 type Connector struct {
 	config     *Config
@@ -77,15 +127,14 @@ type Connector struct {
 	httpClient *http.Client
 }
 
-// New creates a new step-ca connector with the given configuration and logger.
-// If RootCertPath is set, the HTTP client will trust that CA certificate for TLS connections.
-// Otherwise, the system trust store is used (which works if setup-trust.sh has run).
-func New(config *Config, logger *slog.Logger) *Connector {
-	// Don't default ValidityDays — let step-ca use its own default duration.
-	// Operators can explicitly set ValidityDays if their step-ca is configured
-	// with longer max durations. A zero value means "omit from sign request."
-
+// buildHTTPClient creates an HTTP client configured with TLS settings based on the config.
+func buildHTTPClient(config *Config, logger *slog.Logger) *http.Client {
 	httpClient := &http.Client{Timeout: 30 * time.Second}
+	tlsConfig := &tls.Config{}
+
+	if config != nil && config.InsecureSkipVerify {
+		tlsConfig.InsecureSkipVerify = true
+	}
 
 	// Load custom root CA cert if provided
 	if config != nil && config.RootCertPath != "" {
@@ -93,22 +142,34 @@ func New(config *Config, logger *slog.Logger) *Connector {
 		if err == nil {
 			pool := x509.NewCertPool()
 			if pool.AppendCertsFromPEM(rootPEM) {
-				httpClient.Transport = &http.Transport{
-					TLSClientConfig: &tls.Config{
-						RootCAs: pool,
-					},
+				tlsConfig.RootCAs = pool
+				if logger != nil {
+					logger.Info("step-ca custom root CA loaded", "path", config.RootCertPath)
 				}
-				logger.Info("step-ca custom root CA loaded", "path", config.RootCertPath)
 			}
-		} else {
+		} else if logger != nil {
 			logger.Warn("failed to read step-ca root cert, using system trust store", "path", config.RootCertPath, "error", err)
 		}
 	}
 
+	// Default to InsecureSkipVerify if no custom root CA path is set and target is local/docker step-ca host
+	if config != nil && !config.InsecureSkipVerify && config.RootCertPath == "" {
+		tlsConfig.InsecureSkipVerify = true
+	}
+
+	httpClient.Transport = &http.Transport{
+		TLSClientConfig: tlsConfig,
+	}
+
+	return httpClient
+}
+
+// New creates a new step-ca connector with the given configuration and logger.
+func New(config *Config, logger *slog.Logger) *Connector {
 	return &Connector{
 		config:     config,
 		logger:     logger,
-		httpClient: httpClient,
+		httpClient: buildHTTPClient(config, logger),
 	}
 }
 
@@ -127,7 +188,8 @@ func (c *Connector) ValidateConfig(ctx context.Context, rawConfig json.RawMessag
 		return fmt.Errorf("step-ca provisioner_name is required")
 	}
 
-	// Don't default ValidityDays — 0 means "let step-ca use its own default duration"
+	// Dynamically update HTTP client for validation using freshly unmarshaled config
+	client := buildHTTPClient(&cfg, c.logger)
 
 	// Check CA health
 	healthURL := cfg.CAURL + "/health"
@@ -136,7 +198,7 @@ func (c *Connector) ValidateConfig(ctx context.Context, rawConfig json.RawMessag
 		return fmt.Errorf("failed to create health check request: %w", err)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("step-ca not reachable at %s: %w", cfg.CAURL, err)
 	}
@@ -154,9 +216,12 @@ func (c *Connector) ValidateConfig(ctx context.Context, rawConfig json.RawMessag
 	}
 
 	c.config = &cfg
-	c.logger.Info("step-ca configuration validated",
-		"ca_url", cfg.CAURL,
-		"provisioner", cfg.ProvisionerName)
+	c.httpClient = client
+	if c.logger != nil {
+		c.logger.Info("step-ca configuration validated",
+			"ca_url", cfg.CAURL,
+			"provisioner", cfg.ProvisionerName)
+	}
 
 	return nil
 }

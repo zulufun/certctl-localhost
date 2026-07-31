@@ -6,13 +6,11 @@ import {
   CheckCircle2,
   AlertTriangle,
   FileCheck,
-  Code2,
   Trash2,
   ToggleLeft,
   ToggleRight,
   X,
-  Layers,
-  Activity,
+  Pencil,
 } from 'lucide-react';
 import { useTrackedMutation } from '../hooks/useTrackedMutation';
 import { getPolicies, updatePolicy, deletePolicy, createPolicy } from '../api/client';
@@ -63,14 +61,18 @@ function CreatePolicyModal({ isOpen, onClose, onSuccess, isLoading, error }: Cre
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
-    const config = JSON.parse(configStr);
-    await createPolicy({ name: name.trim(), type, severity, config, enabled });
-    setName('');
-    setType(POLICY_TYPES[0]);
-    setSeverity('Warning');
-    setConfigStr('{}');
-    setEnabled(true);
-    onSuccess();
+    try {
+      const config = JSON.parse(configStr);
+      await createPolicy({ name: name.trim(), type, severity, config, enabled });
+      setName('');
+      setType(POLICY_TYPES[0]);
+      setSeverity('Warning');
+      setConfigStr('{}');
+      setEnabled(true);
+      onSuccess();
+    } catch (err: unknown) {
+      alert(`Invalid JSON format in Config field: ${(err as Error).message}`);
+    }
   };
 
   if (!isOpen) return null;
@@ -131,7 +133,7 @@ function CreatePolicyModal({ isOpen, onClose, onSuccess, isLoading, error }: Cre
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-ink mb-1">Cấu Hình Cấu Trúc JSON (Config)</label>
+            <label className="block text-xs font-semibold text-ink mb-1">Cấu Hình JSON (Config)</label>
             <textarea
               value={configStr}
               onChange={e => setConfigStr(e.target.value)}
@@ -144,12 +146,12 @@ function CreatePolicyModal({ isOpen, onClose, onSuccess, isLoading, error }: Cre
           <div className="flex items-center gap-2 pt-1">
             <input
               type="checkbox"
-              id="enabled"
+              id="create-enabled"
               checked={enabled}
               onChange={e => setEnabled(e.target.checked)}
               className="w-4 h-4 rounded border-surface-border accent-emerald-500"
             />
-            <label htmlFor="enabled" className="text-xs text-ink font-medium cursor-pointer">Kích hoạt quy tắc ngay sau khi tạo (Enabled)</label>
+            <label htmlFor="create-enabled" className="text-xs text-ink font-medium cursor-pointer">Kích hoạt quy tắc ngay sau khi tạo (Enabled)</label>
           </div>
 
           <div className="flex justify-end gap-3 pt-3">
@@ -174,13 +176,158 @@ function CreatePolicyModal({ isOpen, onClose, onSuccess, isLoading, error }: Cre
   );
 }
 
+interface EditPolicyModalProps {
+  policy: PolicyRule | null;
+  onClose: () => void;
+  onSave: (id: string, data: Partial<PolicyRule>) => Promise<void>;
+  isLoading: boolean;
+}
+
+function EditPolicyModal({ policy, onClose, onSave, isLoading }: EditPolicyModalProps) {
+  const [name, setName] = useState(policy?.name || '');
+  const [type, setType] = useState<PolicyType>(policy?.type || POLICY_TYPES[0]);
+  const [severity, setSeverity] = useState<PolicySeverity>(policy?.severity || 'Warning');
+  const [configStr, setConfigStr] = useState(JSON.stringify(policy?.config || {}, null, 2));
+  const [enabled, setEnabled] = useState(policy?.enabled ?? true);
+  const [jsonError, setJsonError] = useState<string | null>(null);
+
+  if (!policy) return null;
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) return;
+    try {
+      setJsonError(null);
+      const config = JSON.parse(configStr);
+      await onSave(policy.id, {
+        name: name.trim(),
+        type,
+        severity,
+        config,
+        enabled,
+      });
+      onClose();
+    } catch (err: unknown) {
+      setJsonError(`Cấu hình JSON không hợp lệ: ${(err as Error).message}`);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-surface border border-surface-border rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between pb-3 border-b border-surface-border">
+          <div className="flex items-center gap-2 font-bold text-sm text-ink">
+            <Pencil className="w-4 h-4 text-emerald-400" />
+            <span>Chỉnh Sửa Chính Sách (Edit Policy Rule)</span>
+          </div>
+          <button onClick={onClose} className="text-ink-muted hover:text-ink text-xs p-1">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {jsonError && (
+          <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-xs text-red-400 font-mono">
+            {jsonError}
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-ink mb-1">Tên Quy Tắc (Rule Name) *</label>
+            <input
+              value={name}
+              onChange={e => setName(e.target.value)}
+              className="w-full bg-surface-muted border border-surface-border rounded-xl px-3 py-2 text-xs text-ink focus:outline-none focus:border-emerald-400"
+              required
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-ink mb-1">Loại Quy Tắc (Type) *</label>
+              <select
+                value={type}
+                onChange={e => setType(e.target.value as PolicyType)}
+                className="w-full bg-surface-muted border border-surface-border rounded-xl px-3 py-2 text-xs text-ink focus:outline-none focus:border-emerald-400"
+              >
+                {POLICY_TYPES.map(t => (
+                  <option key={t} value={t}>{humanize(t)}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-ink mb-1">Mức Độ (Severity) *</label>
+              <select
+                value={severity}
+                onChange={e => setSeverity(e.target.value as PolicySeverity)}
+                className="w-full bg-surface-muted border border-surface-border rounded-xl px-3 py-2 text-xs text-ink focus:outline-none focus:border-emerald-400"
+              >
+                {POLICY_SEVERITIES.map(s => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-ink mb-1">Cấu Hình JSON (Config)</label>
+            <textarea
+              value={configStr}
+              onChange={e => setConfigStr(e.target.value)}
+              className="w-full bg-surface-muted border border-surface-border rounded-xl px-3 py-2 text-xs text-ink font-mono focus:outline-none focus:border-emerald-400"
+              rows={4}
+            />
+          </div>
+
+          <div className="flex items-center gap-2 pt-1">
+            <input
+              type="checkbox"
+              id="edit-enabled"
+              checked={enabled}
+              onChange={e => setEnabled(e.target.checked)}
+              className="w-4 h-4 rounded border-surface-border accent-emerald-500"
+            />
+            <label htmlFor="edit-enabled" className="text-xs text-ink font-medium cursor-pointer">
+              Kích hoạt quy tắc (Enabled)
+            </label>
+          </div>
+
+          <div className="flex justify-end gap-3 pt-3 border-t border-surface-border">
+            <button
+              type="button"
+              onClick={onClose}
+              className="btn btn-ghost text-xs px-4 py-2 rounded-xl"
+            >
+              Hủy bỏ
+            </button>
+            <button
+              type="submit"
+              disabled={isLoading}
+              className="btn btn-primary text-xs font-semibold px-4 py-2 rounded-xl disabled:opacity-50"
+            >
+              {isLoading ? 'Saving...' : 'Lưu Thay Đổi'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export default function PoliciesPage() {
   const queryClient = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
+  const [editingPolicy, setEditingPolicy] = useState<PolicyRule | null>(null);
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['policies'],
     queryFn: () => getPolicies(),
+  });
+
+  const updateMutation = useTrackedMutation({
+    mutationFn: ({ id, data }: { id: string; data: Partial<PolicyRule> }) => updatePolicy(id, data),
+    invalidates: [['policies']],
   });
 
   const toggleMutation = useTrackedMutation({
@@ -262,6 +409,7 @@ export default function PoliciesPage() {
               ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20'
               : 'bg-surface-muted text-ink-muted border border-surface-border hover:bg-surface-hover'
           }`}
+          title="Click to toggle enable/disable policy"
         >
           {p.enabled ? <ToggleRight className="w-4 h-4 text-emerald-400" /> : <ToggleLeft className="w-4 h-4 text-ink-faint" />}
           <span>{p.enabled ? 'Enabled' : 'Disabled'}</span>
@@ -273,10 +421,18 @@ export default function PoliciesPage() {
       key: 'actions',
       label: '',
       render: (p) => (
-        <div className="flex justify-end">
+        <div className="flex items-center justify-end gap-2">
+          <button
+            onClick={(e) => { e.stopPropagation(); setEditingPolicy(p); }}
+            className="p-1.5 text-xs text-ink-muted hover:text-emerald-400 hover:bg-surface-muted rounded-lg transition-colors flex items-center gap-1 font-medium"
+            title="Edit Policy"
+          >
+            <Pencil className="w-3.5 h-3.5" />
+            <span>Edit</span>
+          </button>
           <button
             onClick={(e) => { e.stopPropagation(); if (confirm(`Delete policy ${p.name}?`)) deleteMutation.mutate(p.id); }}
-            className="p-1.5 text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg transition-colors flex items-center gap-1"
+            className="p-1.5 text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg transition-colors flex items-center gap-1 font-medium"
             title="Delete Policy"
           >
             <Trash2 className="w-3.5 h-3.5" />
@@ -370,6 +526,17 @@ export default function PoliciesPage() {
         isLoading={createMutation.isPending}
         error={createMutation.error ? (createMutation.error as Error).message : null}
       />
+
+      {editingPolicy && (
+        <EditPolicyModal
+          policy={editingPolicy}
+          onClose={() => setEditingPolicy(null)}
+          onSave={async (id, data) => {
+            await updateMutation.mutateAsync({ id, data });
+          }}
+          isLoading={updateMutation.isPending}
+        />
+      )}
     </>
   );
 }

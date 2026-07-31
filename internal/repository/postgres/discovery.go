@@ -258,7 +258,7 @@ func (r *DiscoveryRepository) ListDiscovered(ctx context.Context, filter *reposi
 			source_path, source_format, agent_id, discovery_scan_id, managed_certificate_id,
 			status, first_seen_at, last_seen_at, dismissed_at, created_at, updated_at
 		FROM discovered_certificates %s
-		ORDER BY last_seen_at DESC
+		ORDER BY CASE WHEN status = 'Dismissed' THEN 1 ELSE 0 END ASC, last_seen_at DESC
 		LIMIT $%d OFFSET $%d`, whereClause, argCount, argCount+1)
 
 	args = append(args, filter.PerPage, offset)

@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import {
   ShieldCheck,
   Plus,
@@ -13,9 +14,11 @@ import {
   XCircle,
   Sparkles,
   Server,
+  AlertTriangle,
+  Lock,
 } from 'lucide-react';
 import { useTrackedMutation } from '../hooks/useTrackedMutation';
-import { getIssuers, testIssuerConnection, deleteIssuer, createIssuer, updateIssuer } from '../api/client';
+import { getIssuers, testIssuerConnection, deleteIssuer, createIssuer, updateIssuer, getCertificates } from '../api/client';
 import PageHeader from '../components/PageHeader';
 import DataTable from '../components/DataTable';
 import type { Column } from '../components/DataTable';
@@ -28,6 +31,13 @@ import TypeSelector from '../components/issuer/TypeSelector';
 import ConfigForm from '../components/issuer/ConfigForm';
 import ConfigDetailModal from '../components/issuer/ConfigDetailModal';
 
+const typeAliases: Record<string, string[]> = {
+  GenericCA: ['GenericCA', 'local', 'local_ca'],
+  ACME: ['ACME', 'acme'],
+  StepCA: ['StepCA', 'stepca'],
+  OpenSSL: ['OpenSSL', 'openssl'],
+};
+
 function issuerStatus(issuer: Issuer): string {
   return issuer.enabled ? 'Enabled' : 'Disabled';
 }
@@ -39,6 +49,11 @@ export default function IssuersPage() {
   const [typeFilter, setTypeFilter] = useState<string>('');
   const [configModal, setConfigModal] = useState<{ title: string; config: Record<string, unknown> } | null>(null);
   const [editingIssuer, setEditingIssuer] = useState<Issuer | null>(null);
+
+  // Deletion restriction states
+  const [blockedDeleteModal, setBlockedDeleteModal] = useState<{ issuer: Issuer; count: number } | null>(null);
+  const [confirmDeleteIssuer, setConfirmDeleteIssuer] = useState<Issuer | null>(null);
+  const [checkingDeleteId, setCheckingDeleteId] = useState<string | null>(null);
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['issuers'],
@@ -55,7 +70,30 @@ export default function IssuersPage() {
   const deleteMutation = useTrackedMutation({
     mutationFn: deleteIssuer,
     invalidates: [['issuers']],
+    onSuccess: () => {
+      toast.success('Đã xóa Issuer thành công');
+      setConfirmDeleteIssuer(null);
+    },
+    onError: (err: Error) => {
+      toast.error(`Không thể xóa Issuer: ${err.message}`);
+    },
   });
+
+  const handleDeleteClick = async (issuer: Issuer) => {
+    setCheckingDeleteId(issuer.id);
+    try {
+      const res = await getCertificates({ issuer_id: issuer.id, per_page: '1' });
+      if (res && res.total > 0) {
+        setBlockedDeleteModal({ issuer, count: res.total });
+        setCheckingDeleteId(null);
+        return;
+      }
+    } catch {
+      // Ignore pre-check fetch error & fall back to confirmation
+    }
+    setCheckingDeleteId(null);
+    setConfirmDeleteIssuer(issuer);
+  };
 
   const createMutation = useTrackedMutation({
     mutationFn: (data: { name: string; type: string; config: Record<string, unknown> }) =>
@@ -64,6 +102,7 @@ export default function IssuersPage() {
     onSuccess: () => {
       setShowCreateModal(false);
       setPreselectedType(null);
+      toast.success('Đã tạo Issuer mới thành công');
     },
   });
 
@@ -72,6 +111,7 @@ export default function IssuersPage() {
     invalidates: [['issuers']],
     onSuccess: () => {
       setEditingIssuer(null);
+      toast.success('Cập nhật Issuer thành công');
     },
   });
 
@@ -83,7 +123,8 @@ export default function IssuersPage() {
   const filteredIssuers = useMemo(() => {
     if (!data?.data) return [];
     if (!typeFilter) return data.data;
-    return data.data.filter(i => i.type === typeFilter);
+    const matches = typeAliases[typeFilter] || [typeFilter];
+    return data.data.filter(i => matches.includes(i.type));
   }, [data?.data, typeFilter]);
 
   const columns: Column<Issuer>[] = [
@@ -162,8 +203,9 @@ export default function IssuersPage() {
             <span>Edit</span>
           </button>
           <button
-            onClick={(e) => { e.stopPropagation(); if (confirm(`Delete issuer ${i.name}?`)) deleteMutation.mutate(i.id); }}
-            className="px-2.5 py-1 text-xs font-medium text-red-400 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded-lg transition-colors flex items-center gap-1"
+            onClick={(e) => { e.stopPropagation(); handleDeleteClick(i); }}
+            disabled={checkingDeleteId === i.id || deleteMutation.isPending}
+            className="px-2.5 py-1 text-xs font-medium text-red-400 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded-lg transition-colors flex items-center gap-1 disabled:opacity-50"
           >
             <Trash2 className="w-3.5 h-3.5" />
             <span>Delete</span>
@@ -247,8 +289,7 @@ export default function IssuersPage() {
                       setShowCreateModal(true);
                     }}
                     onFilter={() => {
-                      const filterValue = type.id === 'local' ? 'local' : type.id;
-                      setTypeFilter(prev => prev === filterValue ? '' : filterValue);
+                      setTypeFilter(prev => prev === type.id ? '' : type.id);
                     }}
                   />
                 ))}
@@ -315,21 +356,93 @@ export default function IssuersPage() {
       <EditIssuerModal
         issuer={editingIssuer}
         onClose={() => setEditingIssuer(null)}
-        onSave={(name) => {
+        onSave={({ name, enabled, config }) => {
           if (!editingIssuer) return;
           updateMutation.mutate({
             id: editingIssuer.id,
             data: {
               name,
               type: editingIssuer.type,
-              config: editingIssuer.config,
-              enabled: editingIssuer.enabled,
+              config,
+              enabled,
             },
           });
         }}
         isSaving={updateMutation.isPending}
         error={updateMutation.error ? (updateMutation.error as Error).message : null}
       />
+
+      {/* Blocked Delete Warning Modal */}
+      {blockedDeleteModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setBlockedDeleteModal(null)}>
+          <div className="bg-surface border border-red-500/30 rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-3 pb-3 border-b border-surface-border text-red-400">
+              <div className="p-2 rounded-xl bg-red-500/10 border border-red-500/20">
+                <Lock className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-ink">Không Thể Xóa Issuer Này</h3>
+                <p className="text-[11px] text-red-400 font-medium">Bản ghi đang có ràng buộc dữ liệu phụ thuộc</p>
+              </div>
+            </div>
+
+            <div className="text-xs space-y-2 text-ink-muted">
+              <p>
+                Nhà cấp phát <strong className="text-ink font-mono">{blockedDeleteModal.issuer.name}</strong> ({blockedDeleteModal.issuer.id}) đang được liên kết và sử dụng bởi <span className="font-bold text-amber-400">{blockedDeleteModal.count} chứng chỉ quản lý</span> trong hệ thống.
+              </p>
+              <p className="text-[11px] bg-amber-500/10 border border-amber-500/20 text-amber-300 p-3 rounded-xl">
+                ⚠️ <strong>Cảnh báo an toàn:</strong> Để xóa Issuer này, vui lòng chuyển các chứng chỉ liên quan sang một Nhà cấp phát (Issuer) khác hoặc xóa các chứng chỉ đó trước.
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                onClick={() => setBlockedDeleteModal(null)}
+                className="btn btn-primary text-xs font-semibold px-4 py-2 rounded-xl"
+              >
+                Đã Hiểu (Đóng)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm Delete Modal (Safe Delete) */}
+      {confirmDeleteIssuer && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setConfirmDeleteIssuer(null)}>
+          <div className="bg-surface border border-surface-border rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-3 pb-3 border-b border-surface-border text-red-400">
+              <div className="p-2 rounded-xl bg-red-500/10 border border-red-500/20">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-ink">Xác Nhận Xóa Issuer</h3>
+                <p className="text-[11px] text-ink-muted">Hành động này không thể hoàn tác</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-ink-muted">
+              Bạn có chắc chắn muốn xóa Nhà cấp phát <strong className="text-ink font-mono">{confirmDeleteIssuer.name}</strong> ({confirmDeleteIssuer.id}) khỏi hệ thống?
+            </p>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                onClick={() => setConfirmDeleteIssuer(null)}
+                className="btn btn-ghost text-xs px-4 py-2 rounded-xl"
+              >
+                Hủy
+              </button>
+              <button
+                onClick={() => deleteMutation.mutate(confirmDeleteIssuer.id)}
+                disabled={deleteMutation.isPending}
+                className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white font-bold rounded-xl text-xs transition-colors disabled:opacity-50"
+              >
+                {deleteMutation.isPending ? 'Đang xóa...' : 'Xóa Issuer'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -337,55 +450,104 @@ export default function IssuersPage() {
 interface EditIssuerModalProps {
   issuer: Issuer | null;
   onClose: () => void;
-  onSave: (name: string) => void;
+  onSave: (data: { name: string; enabled: boolean; config: Record<string, unknown> }) => void;
   isSaving: boolean;
   error: string | null;
 }
 
 function EditIssuerModal({ issuer, onClose, onSave, isSaving, error }: EditIssuerModalProps) {
   const [name, setName] = useState('');
-  useEffect(() => { if (issuer) setName(issuer.name); }, [issuer]);
+  const [enabled, setEnabled] = useState(true);
+  const [config, setConfig] = useState<Record<string, unknown>>({});
+
+  useEffect(() => {
+    if (issuer) {
+      setName(issuer.name);
+      setEnabled(issuer.enabled);
+      setConfig(issuer.config || {});
+    }
+  }, [issuer]);
 
   if (!issuer) return null;
+
+  const typeConfig = issuerTypes.find(
+    (t) => t.id === issuer.type || (typeAliases[t.id] && typeAliases[t.id].includes(issuer.type))
+  );
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
-    onSave(name.trim());
+    onSave({ name: name.trim(), enabled, config });
   };
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-surface border border-surface-border rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4" onClick={e => e.stopPropagation()}>
-        <h2 className="text-lg font-bold text-ink flex items-center gap-2">
-          <Edit3 className="w-5 h-5 text-emerald-400" />
-          <span>Edit Issuer Name</span>
-        </h2>
-        <p className="text-xs text-ink-muted font-mono bg-surface-muted px-2.5 py-1 rounded-lg border border-surface-border">
-          ID: {issuer.id}
+      <div
+        className="bg-surface border border-surface-border rounded-2xl p-6 w-full max-w-xl shadow-2xl space-y-4 max-h-[85vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between pb-3 border-b border-surface-border">
+          <div className="flex items-center gap-2 font-bold text-sm text-ink">
+            <Edit3 className="w-4 h-4 text-emerald-400" />
+            <span>Chỉnh Sửa Nhà Cấp Phát (Edit Issuer)</span>
+          </div>
+          <button onClick={onClose} className="text-ink-muted hover:text-ink text-xs p-1">
+            ✕
+          </button>
+        </div>
+
+        <p className="text-xs text-ink-muted font-mono bg-surface-muted px-2.5 py-1 rounded-lg border border-surface-border inline-block">
+          ID: {issuer.id} · Type: {typeLabels[issuer.type] || issuer.type}
         </p>
+
         {error && <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-xs text-red-400">{error}</div>}
-        <form onSubmit={handleSubmit} className="space-y-4">
+
+        <form onSubmit={handleSubmit} className="space-y-4 text-xs">
           <div>
-            <label className="block text-xs font-medium text-ink mb-1">Tên Issuer *</label>
+            <label className="block font-semibold text-ink mb-1">Tên Issuer *</label>
             <input
               value={name}
-              onChange={e => setName(e.target.value)}
+              onChange={(e) => setName(e.target.value)}
               required
-              className="w-full bg-surface-muted border border-surface-border rounded-xl px-3 py-2 text-sm text-ink focus:outline-none focus:border-emerald-400"
+              className="w-full bg-surface-muted border border-surface-border rounded-xl px-3 py-2 text-xs text-ink focus:outline-none focus:border-emerald-400"
             />
           </div>
+
           <div>
-            <label className="block text-xs font-medium text-ink-muted mb-1">Loại CA Driver (Khóa)</label>
-            <input
-              value={issuer.type}
-              disabled
-              className="w-full bg-surface-border/30 border border-surface-border rounded-xl px-3 py-2 text-xs text-ink-muted font-mono"
-            />
+            <label className="block font-semibold text-ink mb-1">Trạng Thái Kích Hoạt</label>
+            <select
+              value={enabled ? 'true' : 'false'}
+              onChange={(e) => setEnabled(e.target.value === 'true')}
+              className="w-full bg-surface-muted border border-surface-border rounded-xl px-3 py-2 text-xs text-ink focus:outline-none focus:border-emerald-400"
+            >
+              <option value="true">Enabled (Đang hoạt động)</option>
+              <option value="false">Disabled (Tạm ngưng)</option>
+            </select>
           </div>
-          <div className="flex gap-3 pt-2">
-            <button type="button" onClick={onClose} className="btn btn-ghost text-xs flex-1">Hủy</button>
-            <button type="submit" disabled={isSaving} className="btn btn-primary text-xs font-semibold flex-1 rounded-xl">
+
+          {typeConfig && typeConfig.configFields.length > 0 && (
+            <div className="pt-2 border-t border-surface-border space-y-3">
+              <h4 className="font-bold text-ink text-xs uppercase tracking-wider text-emerald-400">
+                Thông Tin Cấu Hình Chữ Ký ({typeConfig.name})
+              </h4>
+              <ConfigForm
+                fields={typeConfig.configFields}
+                values={config}
+                onChange={(key, value) => setConfig({ ...config, [key]: value })}
+                editMode={true}
+              />
+            </div>
+          )}
+
+          <div className="flex justify-end gap-3 pt-3 border-t border-surface-border">
+            <button type="button" onClick={onClose} className="btn btn-ghost text-xs px-4 py-2 rounded-xl">
+              Hủy
+            </button>
+            <button
+              type="submit"
+              disabled={isSaving || !name.trim()}
+              className="btn btn-primary text-xs font-semibold px-4 py-2 rounded-xl disabled:opacity-50"
+            >
               {isSaving ? 'Đang lưu...' : 'Lưu Thay Đổi'}
             </button>
           </div>

@@ -23,6 +23,13 @@ vi.mock('../api/client', () => ({
   getAgents: vi.fn(),
   claimDiscoveredCertificate: vi.fn(),
   dismissDiscoveredCertificate: vi.fn(),
+  getNetworkScanTargets: vi.fn(),
+  createNetworkScanTarget: vi.fn(),
+  updateNetworkScanTarget: vi.fn(),
+  deleteNetworkScanTarget: vi.fn(),
+  triggerNetworkScan: vi.fn(),
+  probeSCEPServer: vi.fn(),
+  listSCEPProbes: vi.fn(),
 }));
 
 import DiscoveryPage from './DiscoveryPage';
@@ -67,6 +74,8 @@ describe('DiscoveryPage — T-1 page coverage', () => {
     vi.mocked(client.getDiscoverySummary).mockResolvedValue({ Unmanaged: 1, Managed: 0, Dismissed: 0 } as never);
     vi.mocked(client.getDiscoveryScans).mockResolvedValue({ data: [], total: 0, page: 1, per_page: 50 } as never);
     vi.mocked(client.getAgents).mockResolvedValue({ data: [], total: 0, page: 1, per_page: 200 } as never);
+    vi.mocked(client.getNetworkScanTargets).mockResolvedValue({ data: [], total: 0, page: 1, per_page: 50 } as never);
+    vi.mocked(client.listSCEPProbes).mockResolvedValue({ probes: [], total: 0 } as never);
     vi.mocked(client.dismissDiscoveredCertificate).mockResolvedValue({ status: 'Dismissed' } as never);
   });
 

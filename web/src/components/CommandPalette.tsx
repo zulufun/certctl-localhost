@@ -27,9 +27,9 @@ import { Command } from 'cmdk';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  LayoutDashboard, ShieldCheck, Search, Server, Network, Radar, Timer,
+  LayoutDashboard, ShieldCheck, Search, Server, Network, Radar, Timer, Code2,
   KeyRound, FileText, ScrollText, RefreshCw, Wrench,
-  Target, ListTodo, HeartPulse,
+  Target, ListTodo, HeartPulse, Globe,
   User, Users, Group,
   Bell, Inbox, Activity,
   Clock, UserCog, CheckCircle2, AlertTriangle, Cog,
@@ -62,7 +62,8 @@ const NAV_COMMANDS: NavCommand[] = [
   { to: '/discovery',      label: 'Discovery',       group: 'Inventory', icon: Search },
   { to: '/agents',         label: 'Agents',          group: 'Inventory', icon: Server },
   { to: '/fleet',          label: 'Fleet Overview',  group: 'Inventory', icon: Network },
-  { to: '/network-scans',  label: 'Network Scans',   group: 'Inventory', icon: Radar },
+  { to: '/network-scans',  label: 'Network Scans',   group: 'Advanced', icon: Radar },
+  { to: '/dev-tools',      label: 'Dev Tools',       group: 'Advanced', icon: Code2 },
   { to: '/short-lived',    label: 'Short-Lived',     group: 'Inventory', icon: Timer },
   // Trust
   { to: '/issuers',          label: 'Issuers',          group: 'Trust', icon: KeyRound },
@@ -73,6 +74,7 @@ const NAV_COMMANDS: NavCommand[] = [
   { to: '/est',              label: 'EST Admin',        group: 'Trust', icon: Wrench },
   // Delivery
   { to: '/targets',         label: 'Targets',        group: 'Delivery', icon: Target },
+  { to: '/domains',         label: 'Quản lý Domain', group: 'Delivery', icon: Globe },
   { to: '/jobs',            label: 'Jobs',           group: 'Delivery', icon: ListTodo },
   { to: '/health-monitor',  label: 'Health Monitor', group: 'Delivery', icon: HeartPulse },
   // People

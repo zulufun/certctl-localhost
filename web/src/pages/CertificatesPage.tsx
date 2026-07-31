@@ -15,6 +15,65 @@ import StatusBadge from '../components/StatusBadge';
 import ErrorState from '../components/ErrorState';
 import { formatDate, daysUntil, expiryColor } from '../api/utils';
 import type { Certificate } from '../api/types';
+import { getManagedDomains, type DomainRecord } from '../api/domains';
+import DomainSelector from '../components/DomainSelector';
+import { Zap, Sparkles } from 'lucide-react';
+
+interface QuickPreset {
+  id: string;
+  name: string;
+  badge: string;
+  description: string;
+  form: {
+    name: string;
+    common_name: string;
+    sans: string;
+    environment: 'production' | 'staging' | 'internal' | 'development';
+    tags: string;
+  };
+}
+
+const PRESETS: QuickPreset[] = [
+  {
+    id: 'nginx-web',
+    name: 'Nginx Web Server',
+    badge: '🚀 Prod Web',
+    description: 'Cấu hình chuẩn Web Nginx với SANs IP & Tag phân loại',
+    form: {
+      name: 'Cert - Nginx Web Server',
+      common_name: 'ubuntu.nginx.bqp',
+      sans: '10.1.0.12, 10.1.0.13',
+      environment: 'production',
+      tags: 'app=nginx, tier=web-frontend',
+    },
+  },
+  {
+    id: 'internal-api',
+    name: 'Internal API Gateway',
+    badge: '🛡️ Internal API',
+    description: 'Cấu hình cổng API nội bộ BQP mạng băng rộng',
+    form: {
+      name: 'Cert - API Gateway Internal',
+      common_name: 'api.example.com',
+      sans: '10.1.0.50, api-v2.example.com',
+      environment: 'internal',
+      tags: 'app=api-gateway, tier=backend',
+    },
+  },
+  {
+    id: 'microservice-dev',
+    name: 'Short-Lived Microservice',
+    badge: '⚡ Dev Service',
+    description: 'Dịch vụ vi mô ngắn hạn kiểm thử local',
+    form: {
+      name: 'Cert - Local Microservice',
+      common_name: 'internal.bqp.vn',
+      sans: '127.0.0.1, 10.1.0.50',
+      environment: 'development',
+      tags: 'app=microservice, ttl=short',
+    },
+  },
+];
 
 function CreateCertificateModal({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
   const [form, setForm] = useState({
@@ -30,18 +89,9 @@ function CreateCertificateModal({ onClose, onSuccess }: { onClose: () => void; o
     renewal_policy_id: '',
     tags: '',
   });
+  const [selectedPresetId, setSelectedPresetId] = useState<string>('');
   const [error, setError] = useState('');
 
-  // Phase 2 P-H1 closure: pre-Phase-2 there were 4 duplicate-key pairs
-  // between this modal and the parent CertificatesPage filter bar:
-  //   ['profiles']        vs ['profiles-filter']
-  //   ['issuers']         vs ['issuers-filter']
-  //   ['owners', 'form']  vs ['owners-filter']
-  //   ['teams', 'form']   vs ['teams-filter']
-  // TanStack v5 dedupes on serialized queryKey, so the same call shape
-  // shared between modal + filter now hits the cache exactly once.
-  // Both sites now request per_page=100 (was 500/none here, 100 there
-  // — the modal's "500 entries" was over-fetching for a dropdown).
   const { data: profilesResp } = useQuery({
     queryKey: ['profiles', { per_page: 100 }],
     queryFn: () => getProfiles({ per_page: '100' }),
@@ -50,10 +100,6 @@ function CreateCertificateModal({ onClose, onSuccess }: { onClose: () => void; o
     queryKey: ['issuers', { per_page: 100 }],
     queryFn: () => getIssuers({ per_page: '100' }),
   });
-  // C-001: owner_id, team_id, and renewal_policy_id are required by the
-  // server (handler in internal/api/handler/certificates.go) and by OpenAPI.
-  // Load the catalog so the user selects valid FKs instead of typing free-text
-  // IDs that would 400 at the server.
   const { data: ownersResp } = useQuery({
     queryKey: ['owners', { per_page: 100 }],
     queryFn: () => getOwners({ per_page: '100' }),
@@ -62,12 +108,6 @@ function CreateCertificateModal({ onClose, onSuccess }: { onClose: () => void; o
     queryKey: ['teams', { per_page: 100 }],
     queryFn: () => getTeams({ per_page: '100' }),
   });
-  // G-1: swap from getPolicies (compliance rules, pol-*) to getRenewalPolicies
-  // (lifecycle policies, rp-*). managed_certificates.renewal_policy_id FK
-  // points at renewal_policies(id), so the dropdown must pull from that table
-  // — the previous getPolicies call populated the dropdown with pol-* IDs that
-  // would 400/23503 at the server. See also OnboardingWizard.tsx:603 and
-  // CertificateDetailPage.tsx:169 for the sibling fixes.
   const { data: policiesResp } = useQuery({
     queryKey: ['renewal-policies', 'form'],
     queryFn: () => getRenewalPolicies(1, 500),
@@ -78,6 +118,39 @@ function CreateCertificateModal({ onClose, onSuccess }: { onClose: () => void; o
   const teams = teamsResp?.data || [];
   const policies = policiesResp?.data || [];
 
+  const handleSelectPreset = (preset: QuickPreset) => {
+    setSelectedPresetId(preset.id);
+    setForm(f => ({
+      ...f,
+      name: preset.form.name,
+      common_name: preset.form.common_name,
+      sans: preset.form.sans,
+      environment: preset.form.environment,
+      tags: preset.form.tags,
+      issuer_id: f.issuer_id || (issuers[0]?.id ?? ''),
+      owner_id: f.owner_id || (owners[0]?.id ?? ''),
+      team_id: f.team_id || (teams[0]?.id ?? ''),
+      renewal_policy_id: f.renewal_policy_id || (policies[0]?.id ?? ''),
+      certificate_profile_id: f.certificate_profile_id || (profiles[0]?.id ?? ''),
+    }));
+  };
+
+  // Find associated IP suggestion for selected domain
+  const managedDomains = getManagedDomains();
+  const currentDomainObj = managedDomains.find(d => d.name === form.common_name);
+  const suggestedIPs = currentDomainObj?.associated_ips;
+
+  const handleAppendSuggestedIP = (ipStr: string) => {
+    const ips = ipStr.split(',').map(s => s.trim()).filter(Boolean);
+    setForm(f => {
+      const current = f.sans ? f.sans.split(',').map(s => s.trim()).filter(Boolean) : [];
+      ips.forEach(ip => {
+        if (!current.includes(ip)) current.push(ip);
+      });
+      return { ...f, sans: current.join(', ') };
+    });
+  };
+
   const selectedProfile = profiles.find(p => p.id === form.certificate_profile_id);
   const ttlLabel = selectedProfile
     ? selectedProfile.max_ttl_seconds < 3600
@@ -87,29 +160,17 @@ function CreateCertificateModal({ onClose, onSuccess }: { onClose: () => void; o
         : `${Math.round(selectedProfile.max_ttl_seconds / 86400)}d`
     : null;
 
-  // 2026-05-05 parity-defaults-cleanup (P3-4, P3-5): the audit flagged
-  // `shortLived` + `selectedEkus` as hidden form-state defaults. They are
-  // not — they're properties of the CertificateProfile that the operator
-  // selects via the dropdown above. Surface them in a read-only profile
-  // detail panel so the operator sees what their profile selection
-  // implies (TTL, allowed EKUs, short-lived eligibility) at the moment of
-  // choice rather than discovering it after a cert issues with the wrong
-  // shape. This closes the audit's opacity finding without introducing
-  // the wrong abstraction (per-cert EKU/short-lived toggles would
-  // contradict the profile-as-primitive design).
   const profileEkus = selectedProfile?.allowed_ekus ?? [];
   const profileShortLived = selectedProfile?.allow_short_lived === true;
 
   const mutation = useTrackedMutation({
     mutationFn: () => {
       const payload: Record<string, unknown> = { ...form };
-      // Convert comma-separated SANs to array
       if (form.sans.trim()) {
         payload.sans = form.sans.split(',').map(s => s.trim()).filter(Boolean);
       } else {
         delete payload.sans;
       }
-      // Convert comma-separated key=value tags to object
       if (form.tags.trim()) {
         const tags: Record<string, string> = {};
         form.tags.split(',').forEach(pair => {
@@ -127,38 +188,122 @@ function CreateCertificateModal({ onClose, onSuccess }: { onClose: () => void; o
     onError: (err: Error) => setError(err.message),
   });
 
-  const inputClass = "w-full bg-white border border-surface-border rounded px-3 py-2 text-sm text-ink focus:outline-none focus:border-brand-400 focus:ring-1 focus:ring-brand-400/20";
-  const selectClass = "w-full bg-white border border-surface-border rounded px-3 py-2 text-sm text-ink";
+  const inputClass = "w-full bg-white border border-surface-border rounded-xl px-3 py-2 text-xs text-ink focus:outline-none focus:border-brand-400 focus:ring-1 focus:ring-brand-400/20";
+  const selectClass = "w-full bg-white border border-surface-border rounded-xl px-3 py-2 text-xs text-ink";
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-surface border border-surface-border rounded p-6 w-full max-w-lg shadow-xl" onClick={e => e.stopPropagation()}>
-        <h2 className="text-lg font-semibold text-ink mb-4">New Certificate</h2>
-        {error && <div className="bg-red-50 border border-red-200 text-red-700 rounded px-3 py-2 text-sm mb-4">{error}</div>}
-        <div className="space-y-3">
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-surface border border-surface-border rounded-2xl p-6 w-full max-w-xl shadow-2xl overflow-y-auto max-h-[90vh] custom-scrollbar" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4 pb-2 border-b border-surface-border">
+          <h2 className="text-base font-bold text-ink flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-emerald-400" />
+            <span>Cấp Phát Chứng Chỉ Mới</span>
+          </h2>
+          <button onClick={onClose} className="text-xs text-ink-muted hover:text-ink">✕</button>
+        </div>
+
+        {/* --- OPTION CHỌN NHANH (PRESETS) --- */}
+        <div className="mb-5 bg-gradient-to-r from-emerald-950/40 via-teal-950/20 to-emerald-950/40 border border-emerald-500/30 rounded-2xl p-3 space-y-2">
+          <div className="flex items-center justify-between text-xs font-bold text-emerald-400">
+            <span className="flex items-center gap-1.5">
+              <Zap className="w-3.5 h-3.5" />
+              <span>Option Chọn Nhanh (Preset Templates):</span>
+            </span>
+            <span className="text-[10px] text-emerald-300/80 font-normal">Tự động điền đầy đủ form mẫu</span>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            {PRESETS.map((p) => {
+              const isSelected = selectedPresetId === p.id;
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => handleSelectPreset(p)}
+                  className={`p-2 rounded-xl border text-left transition-all ${
+                    isSelected
+                      ? 'bg-emerald-500/20 border-emerald-400 text-white shadow-md'
+                      : 'bg-surface/60 border-surface-border text-ink-muted hover:border-emerald-500/50 hover:text-ink'
+                  }`}
+                >
+                  <div className="text-[11px] font-bold text-emerald-300 mb-0.5">{p.badge}</div>
+                  <div className="text-[10px] text-ink-faint leading-tight line-clamp-2">{p.description}</div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {error && <div className="bg-red-500/10 border border-red-500/30 text-red-400 rounded-xl px-3 py-2 text-xs mb-4">{error}</div>}
+
+        <div className="space-y-3 text-xs">
           <div>
-            <label className="text-xs text-ink-muted block mb-1">Name *</label>
+            <label className="text-xs font-semibold text-ink block mb-1">Tên Chứng Chỉ (Name) *</label>
             <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
               className={inputClass}
-              placeholder="API Production Cert" />
+              placeholder="e.g. API Production Cert" />
           </div>
+
           <div>
-            <label className="text-xs text-ink-muted block mb-1">ID (optional)</label>
+            <label className="text-xs font-semibold text-ink block mb-1">Mã Định Danh (ID - Tùy chọn)</label>
             <input value={form.id} onChange={e => setForm(f => ({ ...f, id: e.target.value }))}
               className={inputClass}
-              placeholder="mc-api-prod (auto-generated if empty)" />
+              placeholder="mc-api-prod (tự sinh nếu để trống)" />
           </div>
+
+          {/* Common Name with Searchable DomainSelector */}
           <div>
-            <label className="text-xs text-ink-muted block mb-1">Common Name *</label>
-            <input value={form.common_name} onChange={e => setForm(f => ({ ...f, common_name: e.target.value }))}
-              className={inputClass}
-              placeholder="api.example.com" />
+            <DomainSelector
+              label="Tên Miền Chính (Common Name) *"
+              value={form.common_name}
+              onChange={(domainName) => {
+                setForm(f => ({ ...f, common_name: domainName }));
+              }}
+              placeholder="Chọn từ danh sách Domain hoặc gõ tìm kiếm..."
+            />
+            <input
+              value={form.common_name}
+              onChange={e => setForm(f => ({ ...f, common_name: e.target.value }))}
+              className={`${inputClass} mt-1`}
+              placeholder="Hoặc gõ miền trực tiếp: api.example.com"
+            />
           </div>
+
+          {/* IP Auto-Suggestion Badge */}
+          {suggestedIPs && (
+            <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-2 flex items-center justify-between text-xs text-emerald-300">
+              <span className="flex items-center gap-1">
+                💡 <b>IP gợi ý cho Domain &quot;{form.common_name}&quot;:</b> {suggestedIPs}
+              </span>
+              <button
+                type="button"
+                onClick={() => handleAppendSuggestedIP(suggestedIPs)}
+                className="px-2.5 py-1 bg-emerald-500/20 hover:bg-emerald-500/40 border border-emerald-400/50 rounded-lg font-bold text-[11px] text-white transition-colors"
+              >
+                + Chèn vào SANs
+              </button>
+            </div>
+          )}
+
+          {/* SANs Field */}
           <div>
-            <label className="text-xs text-ink-muted block mb-1">SANs (comma-separated)</label>
-            <input value={form.sans} onChange={e => setForm(f => ({ ...f, sans: e.target.value }))}
-              className={inputClass}
-              placeholder="api.example.com, api-v2.example.com" />
+            <DomainSelector
+              label="Tên Miền Phụ & SANs (Subject Alternative Names)"
+              value=""
+              onChange={(domainName) => {
+                setForm(f => {
+                  const current = f.sans ? f.sans.split(',').map(s => s.trim()).filter(Boolean) : [];
+                  if (!current.includes(domainName)) current.push(domainName);
+                  return { ...f, sans: current.join(', ') };
+                });
+              }}
+              placeholder="+ Chọn thêm từ danh sách Domain..."
+            />
+            <input
+              value={form.sans}
+              onChange={e => setForm(f => ({ ...f, sans: e.target.value }))}
+              className={`${inputClass} mt-1`}
+              placeholder="api.example.com, 10.1.0.12, 10.1.0.13 (phân cách bằng dấu phẩy)"
+            />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -610,7 +755,7 @@ export default function CertificatesPage() {
         subtitle={data ? `${data.total} chứng chỉ` : undefined}
         action={
           <button onClick={() => setShowCreate(true)} className="btn btn-primary text-xs">
-            + Chứng chỉ mới
+            + New Certificate
           </button>
         }
       />

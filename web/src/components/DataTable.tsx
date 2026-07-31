@@ -38,10 +38,10 @@ function writeDensityPref(tableId: string | undefined, d: Density): void {
   } catch { /* noop */ }
 }
 
-interface Column<T> {
+export interface Column<T> {
   key: string;
   label: string;
-  render: (item: T) => React.ReactNode;
+  render: (item: T, index: number) => React.ReactNode;
   className?: string;
 }
 
@@ -210,7 +210,7 @@ export default function DataTable<T>({ columns, data, onRowClick, emptyMessage, 
                 )}
                 {columns.map(col => (
                   <td key={col.key} className={`${cellCls} text-ink ${col.className || ''}`}>
-                    {col.render(item)}
+                    {col.render(item, i)}
                   </td>
                 ))}
               </tr>
@@ -320,4 +320,4 @@ function PaginationControls({ page, perPage, total, onPageChange, onPerPageChang
   );
 }
 
-export type { Column, PaginationProps };
+export type { PaginationProps };

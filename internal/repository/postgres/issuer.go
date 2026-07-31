@@ -7,10 +7,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/zulufun/certctl-localhost/internal/repository"
+	"strings"
 
-	"github.com/zulufun/certctl-localhost/internal/domain"
 	"github.com/google/uuid"
+	"github.com/zulufun/certctl-localhost/internal/domain"
+	"github.com/zulufun/certctl-localhost/internal/repository"
 )
 
 // IssuerRepository implements repository.IssuerRepository
@@ -226,6 +227,10 @@ func (r *IssuerRepository) Delete(ctx context.Context, id string) error {
 	result, err := r.db.ExecContext(ctx, "DELETE FROM issuers WHERE id = $1", id)
 
 	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "foreign key constraint") || strings.Contains(errStr, "23503") || strings.Contains(errStr, "violates foreign key") {
+			return fmt.Errorf("không thể xóa Nhà cấp phát '%s': đang có chứng chỉ hoặc dữ liệu liên quan trong hệ thống. Vui lòng chuyển các chứng chỉ liên quan sang nhà cấp phát khác trước khi xóa", id)
+		}
 		return fmt.Errorf("failed to delete issuer: %w", err)
 	}
 

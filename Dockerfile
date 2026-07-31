@@ -54,7 +54,7 @@ COPY web/ .
 # an explicit `[ -d node_modules ]` post-check so a silent failure is
 # impossible.
 RUN for i in 1 2 3; do \
-        npm ci --include=dev && break; \
+        npm ci --include=dev --include=optional && break; \
         echo "npm ci attempt $i failed; sleeping 5s before retry"; \
         sleep 5; \
     done && \

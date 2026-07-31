@@ -777,7 +777,7 @@ func Load() (*Config, error) {
 			Recipients: getEnvList("CERTCTL_DIGEST_RECIPIENTS", nil),
 		},
 		HealthCheck: HealthCheckConfig{
-			Enabled:          getEnvBool("CERTCTL_HEALTH_CHECK_ENABLED", false),
+			Enabled:          getEnvBool("CERTCTL_HEALTH_CHECK_ENABLED", true),
 			CheckInterval:    getEnvDuration("CERTCTL_HEALTH_CHECK_INTERVAL", 60*time.Second),
 			DefaultInterval:  getEnvInt("CERTCTL_HEALTH_CHECK_DEFAULT_INTERVAL", 300),
 			DefaultTimeout:   getEnvInt("CERTCTL_HEALTH_CHECK_DEFAULT_TIMEOUT", 5000),

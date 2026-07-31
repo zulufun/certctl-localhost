@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { ScrollText, Download, Filter, X, ShieldAlert, FileText } from 'lucide-react';
 import { getAuditEvents } from '../api/client';
 import PageHeader from '../components/PageHeader';
 import DataTable from '../components/DataTable';
@@ -9,16 +10,16 @@ import { formatDateTime } from '../api/utils';
 import type { AuditEvent } from '../api/types';
 
 const actionColors: Record<string, string> = {
-  certificate_created: 'text-emerald-600',
-  renewal_triggered: 'text-brand-500',
-  renewal_job_created: 'text-brand-500',
-  renewal_completed: 'text-emerald-600',
-  deployment_completed: 'text-emerald-600',
-  deployment_failed: 'text-red-600',
-  expiration_alert_sent: 'text-amber-600',
-  agent_registered: 'text-brand-500',
-  policy_violated: 'text-red-600',
-  certificate_revoked: 'text-red-600',
+  certificate_created: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+  renewal_triggered: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
+  renewal_job_created: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
+  renewal_completed: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+  deployment_completed: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+  deployment_failed: 'bg-red-500/15 text-red-400 border-red-500/30',
+  expiration_alert_sent: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+  agent_registered: 'bg-purple-500/15 text-purple-400 border-purple-500/30',
+  policy_violated: 'bg-red-500/15 text-red-400 border-red-500/30',
+  certificate_revoked: 'bg-red-500/15 text-red-400 border-red-500/30',
 };
 
 const RESOURCE_TYPES = ['', 'certificate', 'agent', 'job', 'notification', 'policy', 'target', 'issuer'];
@@ -63,10 +64,6 @@ function exportJSON(events: AuditEvent[]) {
   downloadFile(json, `audit-trail-${new Date().toISOString().slice(0, 10)}.json`, 'application/json');
 }
 
-// Bundle 1 Phase 8 + Phase 10 — event_category filter exposed via the
-// category query param. Allowed values match the server's CHECK
-// constraint; the auditor role uses category=auth to surface only
-// authentication / authorization rows.
 const CATEGORIES = [
   { label: 'All categories', value: '' },
   { label: 'Cert lifecycle', value: 'cert_lifecycle' },
@@ -86,17 +83,7 @@ export default function AuditPage() {
   if (actorFilter) params.actor = actorFilter;
   if (actionFilter) params.action = actionFilter;
   if (category) params.category = category;
-  // P-H2 closure (frontend-design-audit 2026-05-14): translate the
-  // TIME_RANGES dropdown selection into an RFC3339 `since` server
-  // param. Pre-P-H2 this filter was applied client-side AFTER fetching
-  // the entire event window, throwing 99% of rows away in JS; the
-  // server-side handler now accepts `since` (and `until`) and the
-  // audit_events table has a (event_category, timestamp DESC)
-  // composite index that makes the predicate hit an index scan.
-  //
-  // We send only `since`; the "last N units" semantic is implicit
-  // (until=now), so the operator gets a rolling window from the
-  // selected age until the moment the server reads the param.
+
   if (timeRange) {
     const hours = timeRange === '1h' ? 1 : timeRange === '24h' ? 24 : timeRange === '7d' ? 168 : 720;
     params.since = new Date(Date.now() - hours * 3600 * 1000).toISOString();
@@ -108,55 +95,51 @@ export default function AuditPage() {
     refetchInterval: 30000,
   });
 
-  // P-H2: server now applies the time-range predicate. data.data IS
-  // the filtered set; no client-side trimming needed. The pre-P-H2
-  // `filtered` block (commented out below for diff-clarity) used to
-  // walk every row and discard 99% — that's the bug P-H2 closes.
   const filtered = data?.data || [];
 
   const columns: Column<AuditEvent>[] = [
     {
       key: 'action',
-      label: 'Action',
+      label: 'Hành Động (Action)',
       render: (e) => (
-        <span className={`text-sm font-medium ${actionColors[e.action] || 'text-ink'}`}>
+        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-mono font-semibold border ${actionColors[e.action] || 'bg-surface-muted text-ink border-surface-border'}`}>
           {e.action.replace(/_/g, ' ')}
         </span>
       ),
     },
     {
       key: 'actor',
-      label: 'Actor',
+      label: 'Người Thực Hiện (Actor)',
       render: (e) => (
         <div>
-          <div className="text-sm text-ink">{e.actor}</div>
-          <div className="text-xs text-ink-faint">{e.actor_type}</div>
+          <div className="font-bold text-xs text-ink">{e.actor}</div>
+          <div className="text-[10px] text-ink-faint font-mono">{e.actor_type}</div>
         </div>
       ),
     },
     {
       key: 'resource',
-      label: 'Resource',
+      label: 'Đối Tượng (Resource)',
       render: (e) => (
         <div>
-          <div className="text-sm text-ink">{e.resource_type}</div>
-          <div className="text-xs text-ink-faint font-mono">{e.resource_id}</div>
+          <div className="text-xs text-ink font-semibold">{e.resource_type}</div>
+          <div className="text-[10px] text-ink-faint font-mono">{e.resource_id}</div>
         </div>
       ),
     },
     {
       key: 'details',
-      label: 'Details',
+      label: 'Chi Tiết (Details)',
       render: (e) => {
-        if (!e.details || Object.keys(e.details).length === 0) return <span className="text-ink-faint">&mdash;</span>;
+        if (!e.details || Object.keys(e.details).length === 0) return <span className="text-ink-faint text-xs">&mdash;</span>;
         return (
-          <span className="text-xs text-ink-muted font-mono truncate max-w-xs block">
+          <span className="text-[11px] text-ink-muted font-mono bg-surface-muted/60 px-2 py-1 rounded border border-surface-border truncate max-w-xs block" title={JSON.stringify(e.details, null, 2)}>
             {JSON.stringify(e.details).slice(0, 60)}
           </span>
         );
       },
     },
-    { key: 'time', label: 'Time', render: (e) => <span className="text-xs text-ink-muted">{formatDateTime(e.timestamp)}</span> },
+    { key: 'time', label: 'Thời Gian', render: (e) => <span className="text-xs text-ink-muted font-mono">{formatDateTime(e.timestamp)}</span> },
   ];
 
   const hasFilters = resourceType || actorFilter || timeRange || actionFilter || category;
@@ -165,79 +148,98 @@ export default function AuditPage() {
     <>
       <PageHeader
         title="Audit Trail"
-        subtitle={data ? `${filtered.length} events` : undefined}
+        subtitle={data ? `${filtered.length} nhật ký hoạt động được ghi lại` : undefined}
         action={
           filtered.length > 0 ? (
             <div className="flex gap-2">
-              <button onClick={() => exportCSV(filtered)} className="btn btn-ghost text-xs border border-surface-border">
-                Export CSV
+              <button onClick={() => exportCSV(filtered)} className="btn btn-ghost text-xs font-semibold px-3 py-1.5 rounded-xl border border-surface-border flex items-center gap-1.5">
+                <Download className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Export CSV</span>
               </button>
-              <button onClick={() => exportJSON(filtered)} className="btn btn-ghost text-xs border border-surface-border">
-                Export JSON
+              <button onClick={() => exportJSON(filtered)} className="btn btn-ghost text-xs font-semibold px-3 py-1.5 rounded-xl border border-surface-border flex items-center gap-1.5">
+                <Download className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Export JSON</span>
               </button>
             </div>
           ) : undefined
         }
       />
-      <div className="px-4 py-3 flex flex-wrap gap-3 border-b border-surface-border/50">
-        <select
-          value={category}
-          onChange={(e) => setCategory(e.target.value)}
-          className="bg-surface border border-surface-border rounded px-3 py-1.5 text-xs text-ink focus:outline-none focus:border-brand-400"
-          data-testid="audit-category-filter"
-        >
-          {CATEGORIES.map((c) => (
-            <option key={c.value} value={c.value}>{c.label}</option>
-          ))}
-        </select>
-        <select
-          value={resourceType}
-          onChange={(e) => setResourceType(e.target.value)}
-          className="bg-surface border border-surface-border rounded px-3 py-1.5 text-xs text-ink focus:outline-none focus:border-brand-400"
-        >
-          <option value="">All resources</option>
-          {RESOURCE_TYPES.filter(Boolean).map((t) => (
-            <option key={t} value={t}>{t}</option>
-          ))}
-        </select>
-        <input
-          type="text"
-          placeholder="Filter by actor..."
-          value={actorFilter}
-          onChange={(e) => setActorFilter(e.target.value)}
-          className="bg-surface border border-surface-border rounded px-3 py-1.5 text-xs text-ink placeholder-ink-faint focus:outline-none focus:border-brand-400 w-40"
-        />
-        <input
-          type="text"
-          placeholder="Filter by action..."
-          value={actionFilter}
-          onChange={(e) => setActionFilter(e.target.value)}
-          className="bg-surface border border-surface-border rounded px-3 py-1.5 text-xs text-ink placeholder-ink-faint focus:outline-none focus:border-brand-400 w-40"
-        />
-        <select
-          value={timeRange}
-          onChange={(e) => setTimeRange(e.target.value)}
-          className="bg-surface border border-surface-border rounded px-3 py-1.5 text-xs text-ink focus:outline-none focus:border-brand-400"
-        >
-          {TIME_RANGES.map((r) => (
-            <option key={r.value} value={r.value}>{r.label}</option>
-          ))}
-        </select>
-        {hasFilters && (
-          <button
-            onClick={() => { setResourceType(''); setActorFilter(''); setTimeRange(''); setActionFilter(''); }}
-            className="text-xs text-ink-muted hover:text-ink transition-colors"
+
+      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        {/* Filter Controls Bar */}
+        <div className="flex flex-wrap items-center gap-3 bg-surface p-4 rounded-2xl border border-surface-border shadow-sm">
+          <div className="flex items-center gap-2">
+            <Filter className="w-4 h-4 text-emerald-400" />
+            <span className="text-xs font-semibold text-ink">Bộ lọc nhật ký:</span>
+          </div>
+
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            className="bg-surface-muted border border-surface-border rounded-xl px-3 py-1.5 text-xs text-ink focus:outline-none focus:border-emerald-400"
+            data-testid="audit-category-filter"
           >
-            Clear filters
-          </button>
-        )}
-      </div>
-      <div className="flex-1 overflow-y-auto">
-        {error ? (
-          <ErrorState error={error as Error} onRetry={() => refetch()} />
-        ) : (
-          <DataTable columns={columns} data={filtered} isLoading={isLoading} emptyMessage="No audit events" />
-        )}
+            {CATEGORIES.map((c) => (
+              <option key={c.value} value={c.value}>{c.label}</option>
+            ))}
+          </select>
+
+          <select
+            value={resourceType}
+            onChange={(e) => setResourceType(e.target.value)}
+            className="bg-surface-muted border border-surface-border rounded-xl px-3 py-1.5 text-xs text-ink focus:outline-none focus:border-emerald-400"
+          >
+            <option value="">All resources</option>
+            {RESOURCE_TYPES.filter(Boolean).map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+
+          <input
+            type="text"
+            placeholder="Filter by actor..."
+            value={actorFilter}
+            onChange={(e) => setActorFilter(e.target.value)}
+            className="bg-surface-muted border border-surface-border rounded-xl px-3 py-1.5 text-xs text-ink placeholder-ink-faint focus:outline-none focus:border-emerald-400 w-36"
+          />
+
+          <input
+            type="text"
+            placeholder="Filter by action..."
+            value={actionFilter}
+            onChange={(e) => setActionFilter(e.target.value)}
+            className="bg-surface-muted border border-surface-border rounded-xl px-3 py-1.5 text-xs text-ink placeholder-ink-faint focus:outline-none focus:border-emerald-400 w-36"
+          />
+
+          <select
+            value={timeRange}
+            onChange={(e) => setTimeRange(e.target.value)}
+            className="bg-surface-muted border border-surface-border rounded-xl px-3 py-1.5 text-xs text-ink focus:outline-none focus:border-emerald-400"
+          >
+            {TIME_RANGES.map((r) => (
+              <option key={r.value} value={r.value}>{r.label}</option>
+            ))}
+          </select>
+
+          {hasFilters && (
+            <button
+              onClick={() => { setResourceType(''); setActorFilter(''); setTimeRange(''); setActionFilter(''); setCategory(''); }}
+              className="text-xs text-red-400 hover:text-red-300 font-semibold transition-colors flex items-center gap-1 ml-auto"
+            >
+              <X className="w-3.5 h-3.5" />
+              <span>Clear filters</span>
+            </button>
+          )}
+        </div>
+
+        {/* Table Container */}
+        <div className="bg-surface rounded-2xl border border-surface-border shadow-sm overflow-hidden">
+          {error ? (
+            <ErrorState error={error as Error} onRetry={() => refetch()} />
+          ) : (
+            <DataTable columns={columns} data={filtered} isLoading={isLoading} emptyMessage="No audit events" />
+          )}
+        </div>
       </div>
     </>
   );
