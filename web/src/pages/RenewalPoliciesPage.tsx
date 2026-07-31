@@ -264,14 +264,9 @@ export default function RenewalPoliciesPage() {
       key: 'alerts',
       label: 'Alert Thresholds',
       render: (p) => (
-        <div className="flex flex-wrap gap-1">
-          {(p.alert_thresholds_days || []).map(days => (
-            <span key={days} className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">
-              {days}d
-            </span>
-          ))}
-          {(!p.alert_thresholds_days || p.alert_thresholds_days.length === 0) && <span className="text-xs text-ink-faint">&mdash;</span>}
-        </div>
+        <span className="text-xs font-mono text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+          {(p.alert_thresholds_days || []).join(', ') || '—'}
+        </span>
       ),
     },
     {
