@@ -92,7 +92,6 @@ const NAV_COMMANDS: NavCommand[] = [
   { to: '/auth/roles',          label: 'Roles',          group: 'Access', icon: UserCog },
   { to: '/auth/keys',           label: 'API Keys',       group: 'Access', icon: KeyRound },
   { to: '/auth/approvals',      label: 'Approvals',      group: 'Access', icon: CheckCircle2 },
-  { to: '/auth/breakglass',     label: 'Break-glass',    group: 'Access', icon: AlertTriangle },
   { to: '/auth/settings',       label: 'Auth Settings',  group: 'Access', icon: Cog },
   // Audit
   { to: '/audit', label: 'Audit Trail', group: 'Audit', icon: ScrollText },

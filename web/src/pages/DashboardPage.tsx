@@ -44,7 +44,7 @@ const STATUS_COLORS: Record<string, string> = {
   Archived: '#64748b',
 };
 
-function StatCard({ label, value, icon, color }: { label: string; value: string | number; icon: string; color: string }) {
+function StatCard({ label, value, icon, color, isLoading }: { label: string; value: string | number; icon: string; color: string; isLoading?: boolean }) {
   const colorMap: Record<string, { bg: string; border: string; text: string }> = {
     success: { bg: 'bg-emerald-50', border: 'border-t-emerald-500', text: 'text-emerald-700' },
     warning: { bg: 'bg-amber-50', border: 'border-t-amber-500', text: 'text-amber-700' },
@@ -61,7 +61,11 @@ function StatCard({ label, value, icon, color }: { label: string; value: string 
       </div>
       <div>
         <p className="text-xs font-semibold text-ink-muted uppercase tracking-wider">{label}</p>
-        <p className="text-2xl font-bold mt-1 text-ink">{value}</p>
+        {isLoading ? (
+          <div className="h-7 w-16 bg-surface-border/60 rounded animate-pulse mt-1" />
+        ) : (
+          <p className="text-2xl font-bold mt-1 text-ink">{value}</p>
+        )}
       </div>
     </div>
   );
@@ -225,7 +229,7 @@ export default function DashboardPage() {
     refetchInterval: liveTileGate(30_000),
     refetchOnWindowFocus: true, staleTime: STALE_TIME.REAL_TIME,
   });
-  const { data: summary } = useQuery({
+  const { data: summary, isLoading: isSummaryLoading } = useQuery({
     queryKey: ['dashboard-summary'], queryFn: getDashboardSummary,
     refetchInterval: liveTileGate(30_000),
     refetchOnWindowFocus: true, staleTime: STALE_TIME.REAL_TIME,
@@ -248,11 +252,11 @@ export default function DashboardPage() {
     queryKey: ['issuance-rate'], queryFn: () => getIssuanceRate(30),
     refetchInterval: liveTileGate(60_000),
   });
-  const { data: certs } = useQuery({
+  const { data: certs, isLoading: isCertsLoading } = useQuery({
     queryKey: ['certificates', {}], queryFn: () => getCertificates(),
     refetchInterval: liveTileGate(30_000),
   });
-  const { data: jobs } = useQuery({
+  const { data: jobs, isLoading: isJobsLoading } = useQuery({
     queryKey: ['jobs', {}], queryFn: () => getJobs(),
     refetchInterval: liveTileGate(30_000),     // PERF-H1: 10s → 30s
     refetchOnWindowFocus: true, staleTime: STALE_TIME.REAL_TIME,
@@ -329,20 +333,20 @@ export default function DashboardPage() {
     <>
       <PageHeader
         title="Bảng điều khiển"
-        subtitle={health?.status === 'healthy' ? 'Hệ thống hoạt động bình thường' : 'Đang kiểm tra trạng thái hệ thống...'}
+        subtitle={health?.status === 'healthy' ? 'Hệ thống hoạt động bình thường (System healthy)' : 'Đang kiểm tra trạng thái hệ thống... (Checking system status)'}
       />
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
         {/* Stats */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-          <StatCard label="Tổng số chứng chỉ" value={totalCerts} color="info"
+          <StatCard label="Tổng số chứng chỉ" value={totalCerts} color="info" isLoading={isSummaryLoading}
             icon="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-          <StatCard label="Sắp hết hạn" value={expiringSoon} color={expiringSoon > 0 ? 'warning' : 'success'}
+          <StatCard label="Sắp hết hạn" value={expiringSoon} color={expiringSoon > 0 ? 'warning' : 'success'} isLoading={isSummaryLoading}
             icon="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-          <StatCard label="Đã hết hạn" value={expired} color={expired > 0 ? 'danger' : 'success'}
+          <StatCard label="Đã hết hạn" value={expired} color={expired > 0 ? 'danger' : 'success'} isLoading={isSummaryLoading}
             icon="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-          <StatCard label="Agent đang hoạt động" value={activeAgents} color="success"
+          <StatCard label="Agent đang hoạt động" value={activeAgents} color="success" isLoading={isSummaryLoading}
             icon="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2" />
-          <StatCard label="Tác vụ đang chờ" value={pendingJobs} color={pendingJobs > 0 ? 'warning' : 'info'}
+          <StatCard label="Tác vụ đang chờ" value={pendingJobs} color={pendingJobs > 0 ? 'warning' : 'info'} isLoading={isSummaryLoading}
             icon="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
         </div>
 
@@ -368,7 +372,13 @@ export default function DashboardPage() {
               <h3 className="text-sm font-semibold text-ink-muted">Chứng chỉ sắp hết hạn</h3>
               <button onClick={() => navigate('/certificates')} className="text-xs text-brand-400 hover:text-brand-500">Xem tất cả</button>
             </div>
-            {!certs?.data?.length ? (
+            {isCertsLoading ? (
+              <div className="space-y-2.5 animate-pulse">
+                <div className="h-10 bg-surface-border/40 rounded" />
+                <div className="h-10 bg-surface-border/40 rounded" />
+                <div className="h-10 bg-surface-border/40 rounded" />
+              </div>
+            ) : !certs?.data?.length ? (
               <p className="text-sm text-ink-faint">Không có chứng chỉ</p>
             ) : (
               <div className="space-y-2">
@@ -407,7 +417,13 @@ export default function DashboardPage() {
               <h3 className="text-sm font-semibold text-ink-muted">Tác vụ gần đây</h3>
               <button onClick={() => navigate('/jobs')} className="text-xs text-brand-400 hover:text-brand-500">Xem tất cả</button>
             </div>
-            {!jobs?.data?.length ? (
+            {isJobsLoading ? (
+              <div className="space-y-2.5 animate-pulse">
+                <div className="h-10 bg-surface-border/40 rounded" />
+                <div className="h-10 bg-surface-border/40 rounded" />
+                <div className="h-10 bg-surface-border/40 rounded" />
+              </div>
+            ) : !jobs?.data?.length ? (
               <p className="text-sm text-ink-faint">Không có tác vụ</p>
             ) : (
               <div className="space-y-2">

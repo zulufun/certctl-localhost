@@ -88,7 +88,6 @@ const OIDCProvidersPage     = lazy(() => import('./pages/auth/OIDCProvidersPage'
 const OIDCProviderDetailPage = lazy(() => import('./pages/auth/OIDCProviderDetailPage'));
 const GroupMappingsPage     = lazy(() => import('./pages/auth/GroupMappingsPage'));
 const SessionsPage          = lazy(() => import('./pages/auth/SessionsPage'));
-const BreakglassPage        = lazy(() => import('./pages/auth/BreakglassPage'));
 // Audit 2026-05-10 MED-11 closure — federated-user admin.
 const UsersPage             = lazy(() => import('./pages/auth/UsersPage'));
 
@@ -222,8 +221,6 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="auth/keys"                         element={lazyRoute(<KeysPage />)} />
                   <Route path="auth/settings"                     element={lazyRoute(<AuthSettingsPage />)} />
                   <Route path="auth/approvals"                    element={lazyRoute(<ApprovalsPage />)} />
-                  {/* Audit 2026-05-10 CRIT-4 closure — break-glass admin surface. */}
-                  <Route path="auth/breakglass"                   element={lazyRoute(<BreakglassPage />)} />
                   {/* Audit 2026-05-10 MED-11 closure — federated-user admin. */}
                   <Route path="auth/users"                        element={lazyRoute(<UsersPage />)} />
                 </Route>

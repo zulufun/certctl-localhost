@@ -27,7 +27,7 @@ go.work
 vendor/
 
 # Environment variables
-# .env
+.env
 .env.local
 .env.*.local
 

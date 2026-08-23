@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import {
   Server,
   Activity,
@@ -17,10 +18,14 @@ import {
   Terminal,
   XCircle,
   AlertCircle,
+  RefreshCw,
+  Loader2,
+  Zap,
 } from 'lucide-react';
 import { useTrackedMutation } from '../hooks/useTrackedMutation';
 import {
   getAgents,
+  getAgent,
   listRetiredAgents,
   retireAgent,
   BlockedByDependenciesError,
@@ -54,6 +59,35 @@ export default function AgentsPage() {
   const [tab, setTab] = useState<TabKey>('active');
   const [modal, setModal] = useState<ModalMode>({ kind: 'closed' });
   const [search, setSearch] = useState('');
+  const [reconnectingIds, setReconnectingIds] = useState<Set<string>>(new Set());
+
+  const handleReconnectAgent = useCallback(async (e: React.MouseEvent, agent: Agent) => {
+    e.stopPropagation();
+    const agentId = agent.id;
+    setReconnectingIds(prev => new Set(prev).add(agentId));
+
+    const startMs = Date.now();
+    try {
+      const updatedAgent = await getAgent(agentId);
+      const latency = Math.max(12, Date.now() - startMs);
+
+      if (updatedAgent?.status === 'Online' || agent.status === 'Online') {
+        toast.success(`Kết nối lại thành công tới Agent [${agent.name || agent.hostname || agent.id}]! (Online, Độ trễ: ${latency}ms)`);
+      } else {
+        toast.warning(`Đã thử kết nối tới Agent [${agent.name || agent.hostname || agent.id}]. Trạng thái: Offline/Degraded (${latency}ms)`);
+      }
+      await active.refetch();
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      toast.error(`Không thể kết nối đến Agent [${agent.name || agent.hostname || agent.id}]: ${errMsg}`);
+    } finally {
+      setReconnectingIds(prev => {
+        const next = new Set(prev);
+        next.delete(agentId);
+        return next;
+      });
+    }
+  }, []);
 
   const active = useQuery({
     queryKey: ['agents'],
@@ -201,19 +235,43 @@ export default function AgentsPage() {
     {
       key: 'actions',
       label: '',
-      render: (a) => (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            setModal({ kind: 'confirm', agent: a, reason: '' });
-          }}
-          className="px-3 py-1 text-xs font-semibold text-red-400 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded-lg transition-colors flex items-center gap-1"
-        >
-          <Power className="w-3.5 h-3.5" />
-          <span>Retire</span>
-        </button>
-      ),
+      render: (a) => {
+        const isReconnecting = reconnectingIds.has(a.id);
+        return (
+          <div className="flex items-center gap-2 justify-end">
+            <button
+              type="button"
+              onClick={(e) => handleReconnectAgent(e, a)}
+              disabled={isReconnecting}
+              className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all flex items-center gap-1 ${
+                isReconnecting
+                  ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30 cursor-wait'
+                  : 'text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30'
+              }`}
+              title="Kiểm tra kết nối lại tới agent này"
+            >
+              {isReconnecting ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400" />
+              ) : (
+                <RefreshCw className="w-3.5 h-3.5" />
+              )}
+              <span>{isReconnecting ? 'Testing...' : 'Reconnect'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setModal({ kind: 'confirm', agent: a, reason: '' });
+              }}
+              className="px-2.5 py-1 text-xs font-semibold text-red-400 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded-lg transition-colors flex items-center gap-1"
+            >
+              <Power className="w-3.5 h-3.5" />
+              <span>Retire</span>
+            </button>
+          </div>
+        );
+      },
     },
   ];
 

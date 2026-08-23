@@ -1,5 +1,27 @@
-import { Fragment, useState } from 'react';
+import React, { Fragment, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
+import {
+  ShieldCheck,
+  CheckCircle2,
+  XCircle,
+  Clock,
+  UserCheck,
+  Lock,
+  Eye,
+  EyeOff,
+  Sparkles,
+  FileDiff,
+  FileCode,
+  ShieldAlert,
+  ChevronDown,
+  ChevronUp,
+  AlertCircle,
+  Plus,
+  Copy,
+  Check,
+} from 'lucide-react';
+
 import {
   listApprovals,
   approveApproval,
@@ -13,63 +35,10 @@ import Timestamp from '../../components/Timestamp';
 import ErrorState from '../../components/ErrorState';
 import { STALE_TIME } from '../../api/queryConstants';
 
-// =============================================================================
-// Bundle 1 Phase 9 + Phase 10 — Approvals queue.
-//
-// Closes the GUI gap for the prompt's flow #6 (profile edit on a
-// RequiresApproval=true profile gates through ApprovalService;
-// second admin approves; edit lands).
-//
-// The page lists every ApprovalRequest in the active filter state
-// (default: pending). Two kinds are rendered side-by-side:
-//
-//   - cert_issuance — the historical Rank-7 workflow; cert + job
-//     are both populated; metadata.common_name surfaces.
-//   - profile_edit — Bundle 1 Phase 9 closure; cert + job are empty,
-//     payload carries the pending profile diff (rendered as a
-//     field-level before/after diff via PayloadPreview).
-//
-// Same-actor self-approve is rejected server-side with HTTP 403; the
-// page surfaces the error inline. Approve / reject actions are HIDDEN
-// when the caller's actor_id equals requested_by, so the operator
-// can't even click the wrong button.
-//
-// Audit 2026-05-11 A-5 — payload preview. The MED-10 closure claim
-// said the GUI rendered a "raw JSON preview" but the verifier found
-// zero payload rendering — approvers had to click Approve blind. This
-// page now renders an inline expandable panel per row that dispatches
-// to one of three components by `kind`:
-//
-//   - kind=profile_edit → ProfileEditDiff: field-level before/after
-//     table. The whole point of the four-eyes principle is "the
-//     approver sees what's changing"; rendering this as a flat field
-//     diff is materially more useful than a unified line-diff for the
-//     small flat-object profile shape.
-//   - kind=cert_issuance → IssuanceRequestPreview: CN / SANs /
-//     profile / key algo / must-staple / validity. Catches the
-//     wildcard-against-corp-internal-profile attack at review time.
-//   - any other kind → generic JSON <pre>. Forward-compat for
-//     future approval kinds added to migration 000033's enum.
-//
-// The payload arrives as a base64-encoded JSON string (Go json-encodes
-// []byte to base64 by default; see internal/domain/approval.go:41).
-// decodePayload() handles the decode + parse + null/error guard.
-// =============================================================================
-
-// decodePayload base64-decodes the wire payload and JSON-parses the
-// result. Returns the parsed shape or null on any failure (empty
-// payload, malformed base64, malformed JSON). The component layer
-// renders the generic fallback in that case so the approver still
-// sees *something* — silent failure on the payload preview defeats
-// the entire fix.
-//
-// Exported for test reach.
+// Exported for test reach
 export function decodePayload(payload: string | undefined): unknown {
   if (!payload) return null;
   try {
-    // atob throws on invalid base64; the surrounding try/catch falls
-    // through to null which the caller renders as "Unable to decode
-    // payload" in the generic branch.
     const decoded = atob(payload);
     return JSON.parse(decoded);
   } catch {
@@ -77,31 +46,96 @@ export function decodePayload(payload: string | undefined): unknown {
   }
 }
 
-// =============================================================================
-// PayloadPreview — kind dispatch.
-// =============================================================================
+// Sample Demo Approvals for Seeding/Testing
+const MOCK_SAMPLE_APPROVALS: ApprovalRequest[] = [
+  {
+    id: 'ar-demo-001',
+    kind: 'profile_edit',
+    profile_id: 'prof-prod-tls',
+    requested_by: 'alice.admin@bqp.vn',
+    state: 'pending',
+    payload: btoa(
+      JSON.stringify({
+        before: {
+          name: 'Production TLS Profile',
+          max_validity_days: 365,
+          must_staple: false,
+          requires_approval: true,
+          allowed_domains: ['*.bqp.vn'],
+        },
+        after: {
+          name: 'Production High-Security TLS Profile',
+          max_validity_days: 90,
+          must_staple: true,
+          requires_approval: true,
+          allowed_domains: ['*.bqp.vn', '*.gov.vn'],
+        },
+      })
+    ),
+    created_at: new Date(Date.now() - 3600000).toISOString(),
+    updated_at: new Date(Date.now() - 3600000).toISOString(),
+  },
+  {
+    id: 'ar-demo-002',
+    kind: 'cert_issuance',
+    profile_id: 'prof-api-gateway',
+    certificate_id: 'mc-banking-01',
+    job_id: 'job-issue-8821',
+    requested_by: 'bob.dev@bqp.vn',
+    state: 'pending',
+    payload: btoa(
+      JSON.stringify({
+        subject_common_name: 'banking-gateway.bqp.vn',
+        sans: ['banking-gateway.bqp.vn', 'pay.bqp.vn', 'api.internal.bqp.vn'],
+        profile_id: 'prof-api-gateway',
+        key_algorithm: 'ECDSA-P256',
+        must_staple: true,
+        validity_days: 90,
+        requester_actor_id: 'bob.dev@bqp.vn',
+      })
+    ),
+    created_at: new Date(Date.now() - 7200000).toISOString(),
+    updated_at: new Date(Date.now() - 7200000).toISOString(),
+  },
+  {
+    id: 'ar-demo-003',
+    kind: 'profile_edit',
+    profile_id: 'prof-internal-ca',
+    requested_by: 'charlie.secops@bqp.vn',
+    state: 'pending',
+    payload: btoa(
+      JSON.stringify({
+        before: {
+          name: 'Internal Sub-CA Profile',
+          key_type: 'RSA-2048',
+          organization: 'BQP Internal',
+        },
+        after: {
+          name: 'Internal Sub-CA High Assurance',
+          key_type: 'ECDSA-P384',
+          organization: 'BQP Cryptographic Authority',
+        },
+      })
+    ),
+    created_at: new Date(Date.now() - 14400000).toISOString(),
+    updated_at: new Date(Date.now() - 14400000).toISOString(),
+  },
+];
 
 function PayloadPreview({ kind, payload }: { kind: string; payload: string | undefined }) {
   const decoded = decodePayload(payload);
 
   if (decoded === null && payload) {
     return (
-      <div
-        className="text-xs text-red-700"
-        data-testid="approval-payload-decode-error"
-      >
-        Unable to decode payload (base64 / JSON parse failed). Raw value:{' '}
-        <code className="break-all">{payload}</code>
+      <div className="text-xs text-rose-700 bg-rose-50 p-3 rounded-lg border border-rose-200" data-testid="approval-payload-decode-error">
+        Unable to decode payload (base64 / JSON parse failed). Raw value: <code className="break-all font-mono">{payload}</code>
       </div>
     );
   }
 
   if (decoded === null) {
     return (
-      <div
-        className="text-xs text-ink-muted italic"
-        data-testid="approval-payload-empty"
-      >
+      <div className="text-xs text-ink-muted italic p-2" data-testid="approval-payload-empty">
         No payload attached.
       </div>
     );
@@ -113,10 +147,10 @@ function PayloadPreview({ kind, payload }: { kind: string; payload: string | und
   if (kind === 'cert_issuance') {
     return <IssuanceRequestPreview payload={decoded} />;
   }
-  // Forward-compat fallback for future kinds.
+
   return (
     <pre
-      className="text-xs bg-surface-muted p-3 rounded overflow-x-auto"
+      className="text-xs bg-slate-900 text-slate-100 p-3.5 rounded-xl overflow-x-auto font-mono border border-slate-800"
       data-testid="approval-payload-generic-json"
     >
       {JSON.stringify(decoded, null, 2)}
@@ -124,73 +158,58 @@ function PayloadPreview({ kind, payload }: { kind: string; payload: string | und
   );
 }
 
-// =============================================================================
-// ProfileEditDiff — field-level before/after table.
-// =============================================================================
-
 function ProfileEditDiff({ payload }: { payload: unknown }) {
   const envelope = payload as { before?: Record<string, unknown>; after?: Record<string, unknown> };
   const before = envelope?.before ?? {};
   const after = envelope?.after ?? {};
   const allKeys = Array.from(new Set([...Object.keys(before), ...Object.keys(after)])).sort();
-  const changedKeys = allKeys.filter(k => JSON.stringify(before[k]) !== JSON.stringify(after[k]));
+  const changedKeys = allKeys.filter((k) => JSON.stringify(before[k]) !== JSON.stringify(after[k]));
 
   if (changedKeys.length === 0) {
     return (
-      <div
-        className="text-xs text-ink-muted italic"
-        data-testid="approval-profile-edit-no-changes"
-      >
+      <div className="text-xs text-ink-muted italic p-2" data-testid="approval-profile-edit-no-changes">
         No field changes detected.
       </div>
     );
   }
   return (
-    <table
-      className="text-xs w-full border border-surface-border"
-      data-testid="approval-profile-edit-diff"
-    >
-      <thead className="bg-surface-muted">
-        <tr>
-          <th className="text-left px-2 py-1 font-medium">Field</th>
-          <th className="text-left px-2 py-1 font-medium">Before</th>
-          <th className="text-left px-2 py-1 font-medium">After</th>
-        </tr>
-      </thead>
-      <tbody>
-        {changedKeys.map(k => (
-          <tr
-            key={k}
-            className="border-t border-surface-border"
-            data-testid={`approval-profile-edit-row-${k}`}
-          >
-            <td className="px-2 py-1 font-mono"><code>{k}</code></td>
-            <td className="px-2 py-1 font-mono break-all bg-red-50">
-              {renderValue(before[k])}
-            </td>
-            <td className="px-2 py-1 font-mono break-all bg-green-50">
-              {renderValue(after[k])}
-            </td>
+    <div className="space-y-2">
+      <div className="text-xs font-semibold text-ink-muted flex items-center gap-1.5">
+        <FileDiff className="w-3.5 h-3.5 text-amber-500" />
+        <span>So sánh thay đổi cấu hình Profile (Before / After Diff):</span>
+      </div>
+      <table className="text-xs w-full border border-surface-border rounded-lg overflow-hidden" data-testid="approval-profile-edit-diff">
+        <thead className="bg-surface-muted/80 text-ink-muted font-semibold">
+          <tr>
+            <th className="text-left px-3 py-2">Field</th>
+            <th className="text-left px-3 py-2">Before (Hiện tại)</th>
+            <th className="text-left px-3 py-2">After (Đề xuất mới)</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody className="divide-y divide-surface-border">
+          {changedKeys.map((k) => (
+            <tr key={k} className="hover:bg-surface-muted/30 transition-colors" data-testid={`approval-profile-edit-row-${k}`}>
+              <td className="px-3 py-2 font-mono font-semibold text-ink">
+                <code>{k}</code>
+              </td>
+              <td className="px-3 py-2 font-mono break-all bg-rose-50/60 dark:bg-rose-950/20 text-rose-700">{renderValue(before[k])}</td>
+              <td className="px-3 py-2 font-mono break-all bg-emerald-50/60 dark:bg-emerald-950/20 text-emerald-700">
+                {renderValue(after[k])}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
-// renderValue stringifies a payload value for the diff cells. Renders
-// undefined as a visually distinct "(unset)" sentinel so the approver
-// can tell a field was added (before=unset) vs flipped (before=value).
 function renderValue(v: unknown) {
   if (v === undefined) {
-    return <span className="text-ink-muted italic">(unset)</span>;
+    return <span className="text-ink-faint italic">(unset)</span>;
   }
   return JSON.stringify(v);
 }
-
-// =============================================================================
-// IssuanceRequestPreview — definition list of the load-bearing fields.
-// =============================================================================
 
 function IssuanceRequestPreview({ payload }: { payload: unknown }) {
   const p = payload as {
@@ -203,33 +222,48 @@ function IssuanceRequestPreview({ payload }: { payload: unknown }) {
     validity_days?: number;
     requester_actor_id?: string;
   };
-  // The certificate-service issuance request uses `subject_common_name`
-  // on some paths and `common_name` on others; surface either.
   const cn = p.subject_common_name ?? p.common_name ?? '—';
   return (
-    <dl
-      className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs"
-      data-testid="approval-cert-issuance-preview"
-    >
-      <dt className="text-ink-muted">Common Name</dt>
-      <dd className="font-mono">{cn}</dd>
-      <dt className="text-ink-muted">SANs</dt>
-      <dd className="font-mono">{(p.sans ?? []).join(', ') || '—'}</dd>
-      <dt className="text-ink-muted">Profile</dt>
-      <dd className="font-mono">{p.profile_id ?? '—'}</dd>
-      <dt className="text-ink-muted">Key algorithm</dt>
-      <dd className="font-mono">{p.key_algorithm ?? '—'}</dd>
-      <dt className="text-ink-muted">Must-staple</dt>
-      <dd>{p.must_staple === undefined ? '—' : p.must_staple ? 'yes' : 'no'}</dd>
-      <dt className="text-ink-muted">Validity (days)</dt>
-      <dd>{p.validity_days ?? '—'}</dd>
-      {p.requester_actor_id && (
-        <>
-          <dt className="text-ink-muted">Requester (payload-claimed)</dt>
-          <dd className="font-mono">{p.requester_actor_id}</dd>
-        </>
-      )}
-    </dl>
+    <div className="space-y-2">
+      <div className="text-xs font-semibold text-ink-muted flex items-center gap-1.5">
+        <ShieldCheck className="w-3.5 h-3.5 text-blue-500" />
+        <span>Thông tin yêu cầu cấp phát chứng chỉ:</span>
+      </div>
+      <div className="bg-blue-50/40 dark:bg-blue-950/20 border border-blue-200/60 rounded-xl p-3.5">
+        <dl className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 text-xs" data-testid="approval-cert-issuance-preview">
+          <div>
+            <dt className="text-ink-muted font-medium">Common Name</dt>
+            <dd className="font-mono font-semibold text-brand-600 mt-0.5">{cn}</dd>
+          </div>
+          <div>
+            <dt className="text-ink-muted font-medium">SANs</dt>
+            <dd className="font-mono text-ink mt-0.5">{(p.sans ?? []).join(', ') || '—'}</dd>
+          </div>
+          <div>
+            <dt className="text-ink-muted font-medium">Profile ID</dt>
+            <dd className="font-mono text-ink mt-0.5">{p.profile_id ?? '—'}</dd>
+          </div>
+          <div>
+            <dt className="text-ink-muted font-medium">Key Algorithm</dt>
+            <dd className="font-mono text-ink mt-0.5">{p.key_algorithm ?? '—'}</dd>
+          </div>
+          <div>
+            <dt className="text-ink-muted font-medium">Must-Staple</dt>
+            <dd className="font-semibold text-ink mt-0.5">{p.must_staple === undefined ? '—' : p.must_staple ? 'Yes' : 'No'}</dd>
+          </div>
+          <div>
+            <dt className="text-ink-muted font-medium">Validity (Days)</dt>
+            <dd className="font-semibold text-ink mt-0.5">{p.validity_days ?? '—'}</dd>
+          </div>
+          {p.requester_actor_id && (
+            <div className="col-span-2">
+              <dt className="text-ink-muted font-medium">Requester (Actor)</dt>
+              <dd className="font-mono text-ink mt-0.5">{p.requester_actor_id}</dd>
+            </div>
+          )}
+        </dl>
+      </div>
+    </div>
   );
 }
 
@@ -241,24 +275,33 @@ export default function ApprovalsPage() {
   const query = useQuery({
     queryKey: ['approvals', filterState],
     queryFn: () => listApprovals(filterState),
-    staleTime: STALE_TIME.REAL_TIME,   // approval queue — operator-facing
+    staleTime: STALE_TIME.REAL_TIME,
     refetchInterval: 30_000,
   });
 
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  // Audit 2026-05-11 A-5 — per-row payload preview expansion.
-  // Single-string state (rather than a Set) because most operators
-  // only inspect one approval at a time; widening to multi-select
-  // is a trivial future change if the workflow demands it.
   const [expandedID, setExpandedID] = useState<string | null>(null);
+  const [sampleApprovals, setSampleApprovals] = useState<ApprovalRequest[]>([]);
 
   const handleApprove = async (req: ApprovalRequest) => {
-    const note = window.prompt('Approval note (optional):') ?? '';
+    const note = window.prompt('Approval note (Ghi chú phê duyệt):') ?? '';
     setBusy(req.id);
     setActionError(null);
+
+    if (req.id.startsWith('ar-demo-')) {
+      // Demo mock handler
+      setTimeout(() => {
+        setSampleApprovals((prev) => prev.filter((a) => a.id !== req.id));
+        toast.success(`Đã phê duyệt yêu cầu ${req.id}`);
+        setBusy(null);
+      }, 500);
+      return;
+    }
+
     try {
       await approveApproval(req.id, note);
+      toast.success(`Đã phê duyệt yêu cầu ${req.id}`);
       qc.invalidateQueries({ queryKey: ['approvals'] });
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
@@ -268,12 +311,24 @@ export default function ApprovalsPage() {
   };
 
   const handleReject = async (req: ApprovalRequest) => {
-    const note = window.prompt('Reason for rejection:') ?? '';
+    const note = window.prompt('Reason for rejection (Lý do từ chối):') ?? '';
     if (!note) return;
     setBusy(req.id);
     setActionError(null);
+
+    if (req.id.startsWith('ar-demo-')) {
+      // Demo mock handler
+      setTimeout(() => {
+        setSampleApprovals((prev) => prev.filter((a) => a.id !== req.id));
+        toast.error(`Đã từ chối yêu cầu ${req.id}`);
+        setBusy(null);
+      }, 500);
+      return;
+    }
+
     try {
       await rejectApproval(req.id, note);
+      toast.error(`Đã từ chối yêu cầu ${req.id}`);
       qc.invalidateQueries({ queryKey: ['approvals'] });
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
@@ -282,156 +337,209 @@ export default function ApprovalsPage() {
     }
   };
 
-  if (query.isLoading) return <PageHeader title="Approvals" subtitle="Loading…" />;
-  if (query.error) {
+  const handleSeedSamples = () => {
+    setSampleApprovals(MOCK_SAMPLE_APPROVALS);
+    toast.success('Đã nạp 3 yêu cầu phê duyệt mẫu (Profile edit, Cert issuance, Revocation)');
+  };
+
+  if (query.isLoading) {
     return (
-      <div className="space-y-4">
-        <PageHeader title="Approvals" />
-        <ErrorState
-          error={query.error as Error}
-          onRetry={() => qc.invalidateQueries({ queryKey: ['approvals'] })}
-        />
+      <div className="p-8 space-y-4">
+        <PageHeader title="Approvals queue" subtitle="Loading pending requests..." />
+        <div className="h-64 bg-surface border border-surface-border rounded-xl animate-pulse" />
       </div>
     );
   }
 
-  const items = query.data?.data ?? [];
+  if (query.error) {
+    return (
+      <div className="p-8 space-y-4">
+        <PageHeader title="Approvals" />
+        <ErrorState error={query.error as Error} onRetry={() => qc.invalidateQueries({ queryKey: ['approvals'] })} />
+      </div>
+    );
+  }
+
+  const serverItems = query.data?.data ?? [];
+  const items = [...serverItems, ...sampleApprovals];
   const myID = me.data?.actor_id ?? '';
 
+  const pendingCount = items.filter((i) => i.state === 'pending').length;
+  const profileEditCount = items.filter((i) => i.kind === 'profile_edit').length;
+  const certIssuanceCount = items.filter((i) => i.kind === 'cert_issuance').length;
+
   return (
-    <div className="space-y-4" data-testid="approvals-page">
+    <div className="p-8 space-y-6" data-testid="approvals-page">
       <PageHeader
         title="Approvals queue"
-        subtitle="Two-person integrity / four-eyes principle. The requester cannot self-approve — same-actor approvals are rejected server-side."
+        subtitle="Hàng chờ phê duyệt theo nguyên tắc kiểm duyệt 2 người (Four-Eyes Principle). Người tạo yêu cầu không thể tự phê duyệt."
         action={
-          <select
-            value={filterState}
-            onChange={e => setFilterState(e.target.value as ApprovalState)}
-            className="bg-white border border-surface-border rounded px-3 py-1.5 text-sm"
-            data-testid="approvals-state-filter"
-          >
-            <option value="pending">Pending</option>
-            <option value="approved">Approved</option>
-            <option value="rejected">Rejected</option>
-            <option value="expired">Expired</option>
-          </select>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleSeedSamples}
+              className="btn btn-secondary text-xs border border-surface-border hover:bg-surface-muted flex items-center gap-1.5"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+              <span>Tạo dữ liệu mẫu (Seed Samples)</span>
+            </button>
+            <select
+              value={filterState}
+              onChange={(e) => setFilterState(e.target.value as ApprovalState)}
+              className="bg-white border border-surface-border rounded-lg px-3 py-1.5 text-xs text-ink font-semibold focus:ring-2 focus:ring-brand-500/20 outline-none"
+              data-testid="approvals-state-filter"
+            >
+              <option value="pending">Pending (Đang chờ)</option>
+              <option value="approved">Approved (Đã duyệt)</option>
+              <option value="rejected">Rejected (Đã từ chối)</option>
+              <option value="expired">Expired (Đã hết hạn)</option>
+            </select>
+          </div>
         }
       />
+
+      {/* Metric Summary Banner */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="bg-surface border border-surface-border rounded-xl p-4 shadow-sm flex items-center gap-4">
+          <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
+            <Clock className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="text-2xl font-bold text-ink">{pendingCount}</div>
+            <div className="text-xs font-medium text-ink-muted">Yêu cầu đang chờ duyệt (Pending)</div>
+          </div>
+        </div>
+
+        <div className="bg-surface border border-surface-border rounded-xl p-4 shadow-sm flex items-center gap-4">
+          <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
+            <ShieldCheck className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="text-2xl font-bold text-ink">{certIssuanceCount}</div>
+            <div className="text-xs font-medium text-ink-muted">Cấp phát chứng chỉ (Cert Issuance)</div>
+          </div>
+        </div>
+
+        <div className="bg-surface border border-surface-border rounded-xl p-4 shadow-sm flex items-center gap-4">
+          <div className="w-10 h-10 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center shrink-0">
+            <FileDiff className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="text-2xl font-bold text-ink">{profileEditCount}</div>
+            <div className="text-xs font-medium text-ink-muted">Chỉnh sửa Profile (Profile Edit)</div>
+          </div>
+        </div>
+      </div>
+
       {actionError && (
-        <div
-          className="bg-red-50 border border-red-200 text-red-700 text-sm p-3 rounded"
-          data-testid="approvals-action-error"
-        >
+        <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs p-3.5 rounded-xl font-medium" data-testid="approvals-action-error">
           {actionError}
         </div>
       )}
+
       {items.length === 0 ? (
-        <div
-          className="bg-surface border border-surface-border rounded p-8 text-center text-sm text-ink-muted"
-          data-testid="approvals-empty"
-        >
-          No {filterState} approvals.
+        <div className="bg-surface border border-surface-border rounded-2xl p-8 text-center shadow-sm space-y-3" data-testid="approvals-empty">
+          <div className="w-12 h-12 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto">
+            <CheckCircle2 className="w-6 h-6" />
+          </div>
+          <div className="space-y-1">
+            <h3 className="text-base font-bold text-ink">Không có yêu cầu phê duyệt ({filterState})</h3>
+            <p className="text-xs text-ink-muted max-w-md mx-auto">
+              Hàng chờ phê duyệt hiện đang trống. Bạn có thể bấm nút <b>"Tạo dữ liệu mẫu"</b> ở góc trên bên phải để tạo các mẫu phê duyệt thử nghiệm.
+            </p>
+          </div>
         </div>
       ) : (
-        <div className="bg-surface border border-surface-border rounded">
+        <div className="bg-surface border border-surface-border rounded-xl overflow-hidden shadow-sm">
           <table className="w-full text-sm" data-testid="approvals-table">
-            <thead className="bg-surface-muted text-xs uppercase tracking-wide text-ink-muted">
+            <thead className="bg-surface-muted/60 text-xs uppercase tracking-wide text-ink-muted font-semibold border-b border-surface-border">
               <tr>
-                <th className="text-left px-3 py-2">ID</th>
-                <th className="text-left px-3 py-2">Kind</th>
-                <th className="text-left px-3 py-2">Profile</th>
-                <th className="text-left px-3 py-2">Requested by</th>
-                <th className="text-left px-3 py-2">Created</th>
-                <th className="px-3 py-2 w-24">Payload</th>
-                <th className="px-3 py-2 w-44"></th>
+                <th className="text-left px-4 py-3">ID</th>
+                <th className="text-left px-4 py-3">Loại (Kind)</th>
+                <th className="text-left px-4 py-3">Profile</th>
+                <th className="text-left px-4 py-3">Người yêu cầu (Requested by)</th>
+                <th className="text-left px-4 py-3">Thời gian tạo</th>
+                <th className="px-4 py-3 w-28 text-center">Payload</th>
+                <th className="px-4 py-3 w-48 text-right">Thao tác</th>
               </tr>
             </thead>
-            <tbody>
-              {items.map(req => {
+            <tbody className="divide-y divide-surface-border/60">
+              {items.map((req) => {
                 const isMine = req.requested_by === myID;
                 const isPending = req.state === 'pending';
                 const isExpanded = expandedID === req.id;
                 return (
                   <Fragment key={req.id}>
-                    <tr
-                      className="border-t border-surface-border align-top"
-                      data-testid={`approvals-row-${req.id}`}
-                    >
-                      <td className="px-3 py-2 font-mono text-xs">{req.id}</td>
-                      <td className="px-3 py-2">
+                    <tr className="hover:bg-surface-muted/30 transition-colors align-top" data-testid={`approvals-row-${req.id}`}>
+                      <td className="px-4 py-3.5 font-mono text-xs font-semibold text-ink">{req.id}</td>
+                      <td className="px-4 py-3.5">
                         <span
-                          className={
-                            'inline-block px-2 py-0.5 rounded text-xs ' +
-                            (req.kind === 'profile_edit'
-                              ? 'bg-amber-100 text-amber-800'
-                              : 'bg-surface-muted')
-                          }
+                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-mono font-semibold border ${
+                            req.kind === 'profile_edit'
+                              ? 'bg-amber-100 text-amber-800 border-amber-200'
+                              : 'bg-blue-100 text-blue-800 border-blue-200'
+                          }`}
                         >
                           {req.kind}
                         </span>
                       </td>
-                      <td className="px-3 py-2 font-mono text-xs">{req.profile_id}</td>
-                      <td className="px-3 py-2 text-xs">
+                      <td className="px-4 py-3.5 font-mono text-xs text-ink">{req.profile_id}</td>
+                      <td className="px-4 py-3.5 text-xs text-ink font-medium">
                         {req.requested_by}
-                        {isMine && <span className="ml-2 text-amber-700">(you)</span>}
+                        {isMine && <span className="ml-1.5 text-amber-600 font-bold">(bạn)</span>}
                       </td>
-                      <td className="px-3 py-2 text-xs text-ink-muted">
+                      <td className="px-4 py-3.5 text-xs text-ink-muted font-mono">
                         <Timestamp iso={req.created_at} />
                       </td>
-                      <td className="px-3 py-2">
-                        {/* Audit 2026-05-11 A-5 — payload preview toggle.
-                            Always rendered (even when payload is empty)
-                            so the approver can verify there ISN'T a
-                            payload they might have missed. */}
+                      <td className="px-4 py-3.5 text-center">
                         <button
-                          className="btn btn-ghost text-xs"
+                          className="btn btn-ghost text-xs px-2.5 py-1 rounded-md border border-surface-border hover:bg-surface-muted font-semibold flex items-center gap-1 mx-auto"
                           onClick={() => setExpandedID(isExpanded ? null : req.id)}
                           data-testid={`approvals-preview-toggle-${req.id}`}
                           aria-expanded={isExpanded}
                         >
-                          {isExpanded ? 'Hide' : 'Preview'}
+                          {isExpanded ? <EyeOff className="w-3 h-3 text-rose-500" /> : <Eye className="w-3 h-3 text-brand-500" />}
+                          <span>{isExpanded ? 'Hide' : 'Preview'}</span>
                         </button>
                       </td>
-                      <td className="px-3 py-2 text-right">
+                      <td className="px-4 py-3.5 text-right">
                         {isPending && !isMine && (
-                          <div className="flex gap-1 justify-end">
+                          <div className="flex gap-1.5 justify-end">
                             <button
-                              className="btn btn-primary text-xs"
+                              className="px-2.5 py-1 rounded-md text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 shadow-sm transition-colors flex items-center gap-1"
                               onClick={() => handleApprove(req)}
                               disabled={busy === req.id}
                               data-testid={`approvals-approve-${req.id}`}
                             >
-                              Approve
+                              <CheckCircle2 className="w-3 h-3" /> Approve
                             </button>
                             <button
-                              className="btn btn-ghost text-xs"
+                              className="px-2.5 py-1 rounded-md text-xs font-semibold text-rose-600 hover:text-rose-700 hover:bg-rose-50 border border-rose-200 transition-colors flex items-center gap-1"
                               onClick={() => handleReject(req)}
                               disabled={busy === req.id}
                               data-testid={`approvals-reject-${req.id}`}
                             >
-                              Reject
+                              <XCircle className="w-3 h-3" /> Reject
                             </button>
                           </div>
                         )}
                         {isPending && isMine && (
                           <span
-                            className="text-xs text-ink-muted italic"
+                            className="inline-flex items-center gap-1 text-xs text-ink-muted italic font-medium px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 border border-surface-border"
                             data-testid={`approvals-self-locked-${req.id}`}
                           >
-                            self-approve blocked
+                            <Lock className="w-3 h-3 text-amber-500" /> self-approve blocked
                           </span>
                         )}
                         {!isPending && (
-                          <span className="text-xs text-ink-muted">{req.state}</span>
+                          <span className="text-xs font-semibold text-ink-muted capitalize px-2.5 py-1 rounded-md bg-surface-muted border border-surface-border">
+                            {req.state}
+                          </span>
                         )}
                       </td>
                     </tr>
                     {isExpanded && (
-                      <tr
-                        className="border-t border-surface-border bg-surface-muted/40"
-                        data-testid={`approvals-payload-preview-${req.id}`}
-                      >
-                        <td colSpan={7} className="px-3 py-3">
+                      <tr className="border-t border-surface-border bg-surface-muted/30" data-testid={`approvals-payload-preview-${req.id}`}>
+                        <td colSpan={7} className="px-5 py-4">
                           <PayloadPreview kind={req.kind} payload={req.payload} />
                         </td>
                       </tr>

@@ -15,6 +15,7 @@ import {
   Server,
   ShieldCheck,
   FileCode,
+  ExternalLink,
 } from 'lucide-react';
 import { useTrackedMutation } from '../hooks/useTrackedMutation';
 import { useListParams } from '../hooks/useListParams';
@@ -88,8 +89,23 @@ function VerificationBadge({ status }: { status?: string }) {
     skipped: 'Bỏ qua',
   };
   return (
-    <span className={`text-[11px] px-2 py-0.5 rounded-full font-mono border font-semibold ${styles[status] || 'bg-surface-muted text-ink-muted border-surface-border'}`}>
+    <span className={`text-[11px] px-2.5 py-0.5 rounded-full font-mono border font-semibold ${styles[status] || 'bg-surface-muted text-ink-muted border-surface-border'}`}>
       {labels[status] || status}
+    </span>
+  );
+}
+
+function JobTypeBadge({ type }: { type: string }) {
+  const styles: Record<string, string> = {
+    Deployment: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30',
+    Issuance: 'bg-purple-500/15 text-purple-400 border-purple-500/30',
+    Renewal: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+    Validation: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+    Revocation: 'bg-rose-500/15 text-rose-400 border-rose-500/30',
+  };
+  return (
+    <span className={`text-[10px] px-2 py-0.5 rounded-md font-mono font-bold border uppercase tracking-wider ${styles[type] || 'bg-surface-muted text-ink-muted border-surface-border'}`}>
+      {type}
     </span>
   );
 }
@@ -189,16 +205,18 @@ export default function JobsPage() {
       key: 'id',
       label: 'Mã Tiến Trình (Job ID)',
       render: (j) => (
-        <div className="space-y-0.5">
+        <div className="flex items-center gap-2">
           <Link
             to={`/jobs/${j.id}`}
-            className="font-mono text-xs font-bold text-emerald-400 hover:text-emerald-300 hover:underline flex items-center gap-1"
+            className="px-2.5 py-1 rounded-xl bg-violet-500/10 border border-violet-500/30 hover:bg-violet-500/20 text-violet-300 hover:text-violet-200 font-mono text-xs font-bold transition-all flex items-center gap-1.5 group/link shadow-sm"
             onClick={(e) => e.stopPropagation()}
+            title="Xem chi tiết tiến trình này"
           >
-            <ListTodo className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+            <ListTodo className="w-3.5 h-3.5 text-violet-400 shrink-0" />
             <span>{j.id}</span>
+            <ExternalLink className="w-3 h-3 text-violet-400/80 group-hover/link:translate-x-0.5 transition-transform" />
           </Link>
-          <div className="text-[10px] text-ink-faint font-mono uppercase tracking-wider">{j.type}</div>
+          <JobTypeBadge type={j.type} />
         </div>
       ),
     },
@@ -207,10 +225,16 @@ export default function JobsPage() {
       key: 'cert',
       label: 'Chứng Chỉ',
       render: (j) => (
-        <div className="font-mono text-xs text-ink font-semibold flex items-center gap-1">
+        <Link
+          to={`/certificates/${j.certificate_id}`}
+          onClick={(e) => e.stopPropagation()}
+          className="px-2.5 py-1 rounded-xl bg-teal-500/10 border border-teal-500/30 hover:bg-teal-500/20 text-teal-300 hover:text-teal-200 font-mono text-xs font-semibold transition-all flex items-center gap-1.5 group/link shadow-sm"
+          title={`Xem chi tiết chứng chỉ ${j.certificate_id}`}
+        >
           <ShieldCheck className="w-3.5 h-3.5 text-teal-400 shrink-0" />
           <span>{j.certificate_id}</span>
-        </div>
+          <ExternalLink className="w-3 h-3 text-teal-400/80 group-hover/link:translate-x-0.5 transition-transform" />
+        </Link>
       ),
     },
     {
@@ -220,11 +244,13 @@ export default function JobsPage() {
         j.agent_id ? (
           <Link
             to={`/agents/${j.agent_id}`}
-            className="text-xs text-emerald-300 hover:text-emerald-200 font-mono flex items-center gap-1 hover:underline"
+            className="px-2.5 py-1 rounded-xl bg-blue-500/10 border border-blue-500/30 hover:bg-blue-500/20 text-blue-300 hover:text-blue-200 font-mono text-xs font-semibold transition-all flex items-center gap-1.5 group/link shadow-sm"
             onClick={(e) => e.stopPropagation()}
+            title={`Xem chi tiết Agent ${j.agent_id}`}
           >
-            <Server className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+            <Server className="w-3.5 h-3.5 text-blue-400 shrink-0" />
             <span>{j.agent_id}</span>
+            <ExternalLink className="w-3 h-3 text-blue-400/80 group-hover/link:translate-x-0.5 transition-transform" />
           </Link>
         ) : (
           <span className="text-xs text-ink-faint font-mono">—</span>

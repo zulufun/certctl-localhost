@@ -103,13 +103,6 @@ export default function LoginPage() {
         'Nhà cung cấp danh tính của bạn đã đăng xuất bạn (back-channel logout). Vui lòng đăng nhập lại để tiếp tục.',
     }[sessionCause] || null;
 
-  // Break-glass inline form state.
-  const [showBreakglass, setShowBreakglass] = useState(false);
-  const [bgActorID, setBgActorID] = useState('');
-  const [bgPassword, setBgPassword] = useState('');
-  const [bgError, setBgError] = useState<string | null>(null);
-  const [bgSubmitting, setBgSubmitting] = useState(false);
-
   const error = localError || authError;
 
   // On mount, fetch /auth/info and extract any configured OIDC
@@ -153,24 +146,6 @@ export default function LoginPage() {
       } finally {
         setSubmitting(false);
       }
-    }
-  }
-
-  async function handleBreakglassSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!bgActorID.trim() || !bgPassword) return;
-    setBgSubmitting(true);
-    setBgError(null);
-    try {
-      await breakglassLogin(bgActorID.trim(), bgPassword);
-      // breakglassLogin sets the session cookie via Set-Cookie; navigate
-      // to the dashboard, which the AuthProvider will re-validate via
-      // its session-cookie path on next render.
-      navigate('/');
-    } catch (err) {
-      setBgError(err instanceof Error ? err.message : 'Đăng nhập tài khoản khẩn cấp thất bại.');
-    } finally {
-      setBgSubmitting(false);
     }
   }
 
@@ -314,91 +289,6 @@ export default function LoginPage() {
             </button>
           </div>
         </form>
-
-        {/* Break-glass entry — low-visibility on purpose. CRIT-4 closure. */}
-        <div className="mt-4 text-center" data-testid="login-breakglass-entry">
-          {!showBreakglass ? (
-            <button
-              type="button"
-              onClick={() => setShowBreakglass(true)}
-              className="text-xs text-amber-600 hover:text-amber-700 hover:underline"
-              data-testid="login-breakglass-toggle"
-            >
-              Sử dụng tài khoản khẩn cấp (Khôi phục khi sự cố SSO)
-            </button>
-          ) : (
-            <form
-              onSubmit={handleBreakglassSubmit}
-              className="bg-amber-50 border border-amber-200 rounded p-4 mt-4 space-y-3 text-left"
-              data-testid="login-breakglass-form"
-            >
-              <p className="text-xs font-medium text-amber-900">
-                Đăng nhập quản trị khẩn cấp (Break-glass) — mọi hành động đều được kiểm toán. Chỉ sử dụng khi xảy ra sự cố SSO.
-              </p>
-              <div>
-                <label htmlFor="bg-actor-id" className="block text-xs font-medium text-amber-900 mb-1">
-                  Actor ID
-                </label>
-                <input
-                  id="bg-actor-id"
-                  type="text"
-                  value={bgActorID}
-                  onChange={e => setBgActorID(e.target.value)}
-                  autoComplete="off"
-                  spellCheck={false}
-                  placeholder="actor-..."
-                  className="w-full bg-white border border-amber-300 rounded px-3 py-2 text-sm text-ink placeholder-ink-faint focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/20"
-                  data-testid="login-breakglass-actor-id"
-                />
-              </div>
-              <div>
-                <label htmlFor="bg-password" className="block text-xs font-medium text-amber-900 mb-1">
-                  Mật khẩu
-                </label>
-                <input
-                  id="bg-password"
-                  type="password"
-                  value={bgPassword}
-                  onChange={e => setBgPassword(e.target.value)}
-                  autoComplete="off"
-                  className="w-full bg-white border border-amber-300 rounded px-3 py-2 text-sm text-ink placeholder-ink-faint focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/20"
-                  data-testid="login-breakglass-password"
-                />
-              </div>
-              {bgError && (
-                <div
-                  className="bg-red-50 border border-red-200 rounded px-3 py-2 text-xs text-red-700"
-                  data-testid="login-breakglass-error"
-                >
-                  {bgError}
-                </div>
-              )}
-              <div className="flex gap-2">
-                <button
-                  type="submit"
-                  disabled={bgSubmitting || !bgActorID.trim() || !bgPassword}
-                  className="flex-1 bg-amber-600 hover:bg-amber-700 text-white py-2 text-sm font-medium rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  data-testid="login-breakglass-submit"
-                >
-                  {bgSubmitting ? 'Đang đăng nhập…' : 'Đăng nhập khẩn cấp'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowBreakglass(false);
-                    setBgActorID('');
-                    setBgPassword('');
-                    setBgError(null);
-                  }}
-                  className="px-3 py-2 text-sm font-medium text-amber-900 hover:bg-amber-100 rounded transition-colors"
-                  data-testid="login-breakglass-cancel"
-                >
-                  Hủy
-                </button>
-              </div>
-            </form>
-          )}
-        </div>
       </div>
     </div>
   );

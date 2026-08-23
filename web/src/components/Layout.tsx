@@ -107,7 +107,6 @@ const navGroups: NavGroup[] = [
       { to: '/scep', label: 'Quản trị SCEP', icon: Wrench },
       { to: '/est', label: 'Quản trị EST', icon: Wrench },
       { to: '/short-lived', label: 'Chứng chỉ ngắn hạn', icon: Timer },
-      { to: '/auth/breakglass', label: 'Khẩn cấp (Break-glass)', icon: AlertTriangle },
       { to: '/observability', label: 'Giám sát hệ thống', icon: Activity },
       { to: '/auth/settings', label: 'Cài đặt xác thực', icon: Cog },
       { to: '/dev-tools', label: 'Công cụ phát triển (Dev Tools)', icon: Code2 },
